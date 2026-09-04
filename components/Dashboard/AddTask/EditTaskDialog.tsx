@@ -34,13 +34,22 @@ import SearchList02Icon from "@/public/svg/icons/SearchList02Icon";
 import Calendar02Icon from "@/public/svg/icons/Calendar02Icon";
 import CalendarUpload01Icon from "@/public/svg/icons/CalendarUpload01Icon";
 
-export function EditTaskDialogContent({ task }: { task: Task }) {
+export function EditTaskDialogContent({
+  task,
+  onSaved,
+}: {
+  task: Task;
+  onSaved?: () => void;
+}) {
   const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description);
+  const [description, setDescription] = useState(task.description || "");
   const [list, setList] = useState(task.list);
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(
-    new Date(task.date)
-  );
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(() => {
+    const raw = task.scheduledAt ?? task.date;
+    if (!raw) return undefined;
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? undefined : d;
+  });
   const [isSaving, setIsSaving] = useState(false);
 
   const handleDateSelected: SelectSingleEventHandler = (date) => {
@@ -63,8 +72,9 @@ export function EditTaskDialogContent({ task }: { task: Task }) {
         dueDate: selectedDate?.toISOString(),
       });
       toast.success("Task updated successfully");
-    } catch {
-      toast.error("Failed to update task");
+      onSaved?.();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || "Failed to update task");
     } finally {
       setIsSaving(false);
     }

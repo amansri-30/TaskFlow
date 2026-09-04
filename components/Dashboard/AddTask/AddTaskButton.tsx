@@ -4,11 +4,23 @@ import { Button } from "../../ui/button";
 import { AddTaskInlineModal } from "./AddTaskInlineModal";
 import AddCircleIcon from "@/public/svg/icons/AddCircleIcon";
 
-export function AddTaskButton() {
+export function AddTaskButton({
+  onTaskAdded,
+}: {
+  onTaskAdded?: () => void;
+}) {
   const [showTaskButton, setShowTaskButton] = useState(false);
 
+  const handleClose = () => setShowTaskButton(false);
+
   return showTaskButton ? (
-    <AddTaskInlineModal handleCloseModal={() => setShowTaskButton(false)} />
+    <AddTaskInlineModal
+      handleCloseModal={handleClose}
+      onTaskAdded={() => {
+        onTaskAdded?.();
+        handleClose();
+      }}
+    />
   ) : (
     <AddTaskButtonComponent onClickHandler={() => setShowTaskButton(true)} />
   );

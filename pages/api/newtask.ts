@@ -14,14 +14,13 @@ const newTask = catchAsyncError(
     const { taskTitle, description, dueDate, list } = req.body;
 
     if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
-    if (!description) return handleRes(res, 400, false, "Description is required");
 
     const user = await isAuthenticated(req, res);
     if (!user) return handleRes(res, 401, false, "No account is logged in");
 
     await Task.create({
       title: taskTitle,
-      description,
+      description: description || "",
       user: user._id,
       scheduledAt: dueDate,
       list,

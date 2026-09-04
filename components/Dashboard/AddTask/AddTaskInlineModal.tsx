@@ -47,10 +47,12 @@ const FormSchema = z.object({
 
 type AddTaskInlineModalProps = {
   handleCloseModal: React.MouseEventHandler<HTMLButtonElement>;
+  onTaskAdded?: () => void;
 };
 
 export function AddTaskInlineModal({
   handleCloseModal,
+  onTaskAdded,
 }: AddTaskInlineModalProps) {
   const form = useForm<z.infer<typeof FormSchema>>({
     resolver: zodResolver(FormSchema),
@@ -69,15 +71,16 @@ export function AddTaskInlineModal({
       dueDate: data.dueDate ?? null,
       list: data.list,
     };
-  
-    console.log("Submitting form data:", formData);
-  
+
     try {
       const response = await axios.post("/api/newtask", formData);
       toast.success(response.data.message);
+      form.reset();
+      onTaskAdded?.();
     } catch (error: any) {
-      console.error("Error submitting form:", error.response?.data || error.message);
-      toast.error(error.response?.data || error.message);
+      const message =
+        error?.response?.data?.message || error?.message || "Failed to add task";
+      toast.error(message);
     }
   }
   

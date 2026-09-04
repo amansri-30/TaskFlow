@@ -7,12 +7,12 @@ const TaskSchema = new mongoose.Schema({
   },
   description: {
     type: String,
-    required: true,
+    default: "",
     maxLength: [100, "Description cannot exceed 100 Characters"],
   },
   list: {
     type: String,
-    required: true,
+    default: "default",
   },
   createdAt: {
     type: Date,
@@ -30,6 +30,10 @@ const TaskSchema = new mongoose.Schema({
   scheduledAt: {
     type: Date,
     default: null,
+  },
+  completed: {
+    type: Boolean,
+    default: false,
   },
 });
 

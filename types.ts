@@ -25,10 +25,15 @@ export type AnimationData = {
 
 export type Task = {
   id: string;
+  _id?: string;
   title: string;
-  description: string;
+  description?: string;
   list: string;
-  date: string
+  date?: string;
+  scheduledAt?: string;
+  completed?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type SideBarDataType = {

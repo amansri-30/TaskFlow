@@ -14,7 +14,19 @@ const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
   if (!user) return handleRes(res, 401, false, "No account is logged in");
 
   const tasks = await Task.find({ user: user._id }).sort({ createdAt: -1 });
-  handleRes(res, 200, true, "Fetched all tasks", { tasks });
+
+  const mapped = tasks.map((t) => ({
+    id: t._id.toString(),
+    title: t.title,
+    description: t.description,
+    list: t.list,
+    scheduledAt: t.scheduledAt,
+    completed: t.completed,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  }));
+
+  handleRes(res, 200, true, "Fetched all tasks", { tasks: mapped });
 });
 
 export default getAllTasks;

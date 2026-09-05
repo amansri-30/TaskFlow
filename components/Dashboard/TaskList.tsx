@@ -4,6 +4,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "../ui/skeleton";
 import {
   Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "../ui/button";
@@ -11,12 +16,11 @@ import { Button } from "../ui/button";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { Task } from "@/types";
-import { Trash2 } from "lucide-react";
+import { Trash2, CheckCircle2, Circle, ListChecks } from "lucide-react";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
 
-import TickDouble03Icon from "@/public/svg/icons/TickDouble03Icon";
 import PencilEdit02Icon from "@/public/svg/icons/PencilEdit02Icon";
 
 const emptyTasks: Task[] = [];
@@ -27,6 +31,7 @@ export default function TaskList() {
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
   const [search, setSearch] = useState<string>("");
+  const [listFilter, setListFilter] = useState<string>("all");
   const [refreshKey, setRefreshKey] = useState<number>(0);
 
   const fetchTasks = useCallback(async () => {
@@ -50,17 +55,31 @@ export default function TaskList() {
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
-  const incomplete = tasks.filter((t) => !t.completed);
-  const completed = tasks.filter((t) => t.completed);
+  const total = tasks.length;
+  const completedCount = tasks.filter((t) => t.completed).length;
+  const pendingCount = total - completedCount;
+  const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
+
+  const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
+
+  useEffect(() => {
+    if (listFilter !== "all" && !lists.includes(listFilter)) {
+      setListFilter("all");
+    }
+  }, [lists, listFilter]);
 
   const term = search.trim().toLowerCase();
-  const visibleIncomplete = term
-    ? incomplete.filter(
-        (t) =>
-          t.title.toLowerCase().includes(term) ||
-          (t.description || "").toLowerCase().includes(term)
-      )
-    : incomplete;
+  const filtered = tasks.filter((t) => {
+    if (listFilter !== "all" && t.list !== listFilter) return false;
+    if (!term) return true;
+    return (
+      t.title.toLowerCase().includes(term) ||
+      (t.description || "").toLowerCase().includes(term)
+    );
+  });
+
+  const incomplete = filtered.filter((t) => !t.completed);
+  const completed = filtered.filter((t) => t.completed);
 
   const handleToggleComplete = async (task: Task, value: boolean) => {
     const previous = tasks;
@@ -89,7 +108,7 @@ export default function TaskList() {
 
   return (
     <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-lg font-semibold md:text-2xl">All Tasks</h1>
         <div className="flex items-center gap-2">
           <input
@@ -118,20 +137,84 @@ export default function TaskList() {
             className="mt-4"
             onClick={() => {
               setSearch("");
+              setListFilter("all");
               refresh();
             }}
           >
             Retry
           </Button>
         </div>
+      ) : loading ? (
+        <TaskItemsSkeleton />
       ) : (
         <>
+          {/* Overview / Stats */}
+          <section
+            aria-label="Task overview"
+            className="rounded-lg border bg-card text-card-foreground shadow-sm p-4"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <ListChecks className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-medium">Overview</h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-3">
+              <Stat
+                icon={<ListChecks className="h-4 w-4" />}
+                label="Total"
+                value={total}
+              />
+              <Stat
+                icon={<Circle className="h-4 w-4" />}
+                label="Pending"
+                value={pendingCount}
+              />
+              <Stat
+                icon={<CheckCircle2 className="h-4 w-4" />}
+                label="Completed"
+                value={completedCount}
+              />
+            </div>
+            <div
+              className="h-2 w-full overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-valuenow={completionPct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label="Task completion"
+            >
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                style={{ width: `${completionPct}%` }}
+              />
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {completionPct}% of tasks completed
+            </p>
+          </section>
+
+          {/* List Filter */}
+          {lists.length > 0 && (
+            <div className="flex flex-wrap gap-2" aria-label="Filter by list">
+              <FilterChip
+                active={listFilter === "all"}
+                onClick={() => setListFilter("all")}
+                label="All"
+              />
+              {lists.map((list) => (
+                <FilterChip
+                  key={list}
+                  active={listFilter === list}
+                  onClick={() => setListFilter(list)}
+                  label={list}
+                />
+              ))}
+            </div>
+          )}
+
           {/* Incomplete Tasks */}
           <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
-            {loading ? (
-              <TaskItemsSkeleton show={true} />
-            ) : visibleIncomplete.length > 0 ? (
-              visibleIncomplete.map((task) => (
+            {incomplete.length > 0 ? (
+              incomplete.map((task) => (
                 <TaskItem
                   key={task.id}
                   task={task}
@@ -143,7 +226,9 @@ export default function TaskList() {
               ))
             ) : (
               <p className="text-muted-foreground">
-                {term ? "No matching tasks" : "No tasks yet — add one below!"}
+                {term || listFilter !== "all"
+                  ? "No matching tasks"
+                  : "No tasks yet — add one below!"}
               </p>
             )}
             <div className="px-1 mt-1">
@@ -171,14 +256,55 @@ export default function TaskList() {
               </div>
             </>
           )}
-
-          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-            <TickDouble03Icon className="h-4 w-4" />
-            <p>{completed.length} Completed Tasks</p>
-          </div>
         </>
       )}
     </main>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+
+function Stat({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 text-sm">
+      <span className="text-muted-foreground">{icon}</span>
+      <span className="text-muted-foreground">{label}:</span>
+      <span className="font-semibold tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+
+function FilterChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded-full border px-3 py-1 text-sm capitalize transition-colors ${
+        active
+          ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+          : "border-input text-muted-foreground hover:bg-muted"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -197,6 +323,8 @@ function TaskItem({
   onDelete: (task: Task) => void;
   onRefresh: () => void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   return (
     <div className="flex px-2 items-center justify-between space-x-2 w-full hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-lg transition duration-300 ease-in-out group">
       <div className="flex items-center min-w-0">
@@ -226,13 +354,42 @@ function TaskItem({
               <EditTaskDialogContent task={task} onSaved={onRefresh} />
             </Dialog>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
-            <button
-              aria-label={`Delete ${task.title}`}
-              onClick={() => onDelete(task)}
-              className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 rounded"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+              <DialogTrigger asChild>
+                <button
+                  aria-label={`Delete ${task.title}`}
+                  className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 rounded"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[400px]">
+                <DialogHeader>
+                  <DialogTitle>Delete task?</DialogTitle>
+                  <DialogDescription>
+                    Are you sure you want to delete &ldquo;{task.title}&rdquo;?
+                    This action cannot be undone.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter className="flex gap-2 sm:justify-end">
+                  <Button
+                    variant="outline"
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      onDelete(task);
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         )}
       </div>
@@ -242,17 +399,17 @@ function TaskItem({
 
 // --------------------------------------------------------------------------------------
 
-function TaskItemsSkeleton({ show }: { show: boolean }) {
+function TaskItemsSkeleton() {
   return (
-    <>
-      <Skeleton className="h-4 mb-2 w-[250px]" />
-      <Skeleton className="h-4 mb-2 w-[200px]" />
-      {show && (
-        <>
-          <Skeleton className="h-4 mb-2 w-[250px]" />
-          <Skeleton className="h-4 mb-2 w-[200px]" />
-        </>
-      )}
-    </>
+    <section
+      aria-label="Loading tasks"
+      className="flex flex-col gap-4 p-4 border rounded-lg"
+    >
+      <Skeleton className="h-4 w-[250px]" />
+      <Skeleton className="h-4 w-[200px]" />
+      <Skeleton className="h-4 w-[250px]" />
+      <Skeleton className="h-4 w-[200px]" />
+      <Skeleton className="h-4 w-[250px]" />
+    </section>
   );
 }

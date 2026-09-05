@@ -56,7 +56,9 @@ export const loginUser = createAsyncThunk(
       );
       return response.data.user;
     } catch (error: any) {
-      return thunkAPI.rejectWithValue(error.response.data.errors);
+      return thunkAPI.rejectWithValue(
+        error?.response?.data?.message || "Login failed. Please try again."
+      );
     }
   }
 );
@@ -72,7 +74,9 @@ export const logoutUser = createAsyncThunk(
       );
       return response.data.message;
     } catch (error: any) {
-      return thunkAPI.rejectWithValue(error.response.data.errors);
+      return thunkAPI.rejectWithValue(
+        error?.response?.data?.message || "Logout failed."
+      );
     }
   }
 );
@@ -82,14 +86,13 @@ export const getCurrentUser = createAsyncThunk(
   async (_, thunkAPI) => {
     try {
       const response = await axios.get(`${server}/api/profile`, {
-        headers: {
-          Authorization: "Token :",
-        },
         withCredentials: true,
       });
       return response.data.user;
     } catch (error: any) {
-      return thunkAPI.rejectWithValue(error.response.data.errors);
+      return thunkAPI.rejectWithValue(
+        error?.response?.data?.message || "Session expired. Please log in."
+      );
     }
   }
 );
@@ -109,10 +112,10 @@ const userSlice = createSlice({
         state.user = action.payload;
         state.error = null;
       })
-      .addCase(loginUser.rejected, (state) => {
+      .addCase(loginUser.rejected, (state, action) => {
         state.isLoading = false;
         state.isAuthenticated = false;
-        state.error = "Login failed. Please try again.";
+        state.error = (action.payload as string) || "Login failed. Please try again.";
       })
 
       .addCase(registerUser.pending, (state) => {
@@ -139,10 +142,9 @@ const userSlice = createSlice({
         state.user = null;
         state.error = null;
       })
-      .addCase(logoutUser.rejected, (state) => {
+      .addCase(logoutUser.rejected, (state, action) => {
         state.isLoading = false;
-        state.isAuthenticated = false;
-        state.error = "Logout failed. Please try again.";
+        state.error = (action.payload as string) || "Logout failed. Please try again.";
       })
 
       .addCase(getCurrentUser.pending, (state) => {

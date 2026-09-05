@@ -32,9 +32,12 @@ export default function LoginForm() {
     }
   }, [userId, router]);
 
-  const handleLogin = (e: FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
-    dispatch(loginUser({ email, password }));
+    const result = await dispatch(loginUser({ email, password }));
+    if (loginUser.rejected.match(result)) {
+      toast.error((result.payload as string) || "Invalid email or password");
+    }
   };
 
   return (

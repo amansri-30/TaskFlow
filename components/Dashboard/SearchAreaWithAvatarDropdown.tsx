@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { MobileNav } from "./SideBar/MobileSideBar";
+import type { TaskStats } from "./Dashboard";
 import { Search } from "lucide-react";
 import { Input } from "../ui/input";
 import {
@@ -21,7 +22,15 @@ import CustomButton from "../elements/CustomButton";
 import GetQuotes from "@/middleware/getQuotes";
 import toast from "react-hot-toast";
 
-export default function SearchAreaWithAvatarDropdown() {
+export default function SearchAreaWithAvatarDropdown({
+  activeFilter,
+  onSelectFilter,
+  stats,
+}: {
+  activeFilter: string;
+  onSelectFilter: (filter: string) => void;
+  stats: TaskStats;
+}) {
   const user = useAppSelector((state) => state.user.user?.name);
   const [quote, setQuote] = useState<string>("");
   const dispatch = useAppDispatch();
@@ -53,7 +62,11 @@ export default function SearchAreaWithAvatarDropdown() {
 
   return (
     <header className="flex h-14 items-center gap-4 border-b bg-muted/40 px-4 lg:h-[60px] lg:px-6">
-      <MobileNav />
+      <MobileNav
+        activeFilter={activeFilter}
+        onSelectFilter={onSelectFilter}
+        stats={stats}
+      />
       <div className="w-full flex-1">
         <form onSubmit={(e) => e.preventDefault()}>
           <div className="relative flex flex-col md:flex-row items-center">

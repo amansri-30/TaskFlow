@@ -1,3 +1,4 @@
+"use client";
 import React from "react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Bell, Flower, Menu } from "lucide-react";
@@ -17,8 +18,17 @@ import { SideBarItems } from "./SideBarItems";
 import ThemeToggle from "@/components/elements/themeToggle";
 import NotificationButton from "@/components/elements/NotificationButton";
 import ImportantLinks from "./ImportantLinks";
+import type { TaskStats } from "../Dashboard";
 
-export const MobileNav = () => {
+export const MobileNav = ({
+  activeFilter,
+  onSelectFilter,
+  stats,
+}: {
+  activeFilter: string;
+  onSelectFilter: (filter: string) => void;
+  stats: TaskStats;
+}) => {
   return (
     <>
       <Sheet>
@@ -41,6 +51,9 @@ export const MobileNav = () => {
             <SideBarItems
               SideBarList={SideBarList}
               listNames={listNames}
+              activeFilter={activeFilter}
+              onSelectFilter={onSelectFilter}
+              stats={stats}
             />
           </nav>
           <ImportantLinks />

@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "../ui/skeleton";
 import {
@@ -16,22 +17,48 @@ import { Button } from "../ui/button";
 import axios from "axios";
 import toast from "react-hot-toast";
 import { Task } from "@/types";
-import { Trash2, CheckCircle2, Circle, ListChecks } from "lucide-react";
+import {
+  Trash2,
+  CheckCircle2,
+  Circle,
+  ListChecks,
+  CalendarDays,
+} from "lucide-react";
+import { isSameDay, startOfDay, isBefore } from "date-fns";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
+import type { TaskStats } from "./Dashboard";
+import { useAppDispatch } from "@/hooks";
+import { userActions } from "@/redux/user/userSlice";
 
 import PencilEdit02Icon from "@/public/svg/icons/PencilEdit02Icon";
 
 const emptyTasks: Task[] = [];
 
-export default function TaskList() {
+const FILTERS = [
+  { value: "all", label: "All" },
+  { value: "today", label: "Today" },
+  { value: "scheduled", label: "Scheduled" },
+  { value: "overdue", label: "Overdue" },
+];
+
+export default function TaskList({
+  filter,
+  onFilterChange,
+  onStatsChange,
+}: {
+  filter: string;
+  onFilterChange: (filter: string) => void;
+  onStatsChange: (stats: TaskStats) => void;
+}) {
+  const router = useRouter();
+  const dispatch = useAppDispatch();
   const [tasks, setTasks] = useState<Task[]>(emptyTasks);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
   const [search, setSearch] = useState<string>("");
-  const [listFilter, setListFilter] = useState<string>("all");
   const [refreshKey, setRefreshKey] = useState<number>(0);
 
   const fetchTasks = useCallback(async () => {
@@ -40,14 +67,20 @@ export default function TaskList() {
     try {
       const response = await axios.get("/api/getalltasks");
       setTasks(response.data.tasks || []);
-    } catch {
+    } catch (err: any) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
+        dispatch(userActions.resetUser());
+        toast.error("Your session has expired. Please log in again.");
+        router.replace("/login");
+        return;
+      }
       setError("Failed fetching tasks. Try refreshing the page.");
       toast.error("Failed fetching tasks. Try refreshing the page.");
       setTasks(emptyTasks);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dispatch, router]);
 
   useEffect(() => {
     fetchTasks();
@@ -60,17 +93,54 @@ export default function TaskList() {
   const pendingCount = total - completedCount;
   const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
 
+  useEffect(() => {
+    const todayCount = tasks.filter((t) => {
+      if (!t.scheduledAt) return false;
+      const d = new Date(t.scheduledAt);
+      return !isNaN(d.getTime()) && isSameDay(d, new Date());
+    }).length;
+    const scheduledCount = tasks.filter((t) => {
+      if (!t.scheduledAt) return false;
+      return !isNaN(new Date(t.scheduledAt).getTime());
+    }).length;
+    onStatsChange({ today: todayCount, scheduled: scheduledCount });
+  }, [tasks, onStatsChange]);
+
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
 
   useEffect(() => {
-    if (listFilter !== "all" && !lists.includes(listFilter)) {
-      setListFilter("all");
+    const isListFilter = filter.startsWith("list:");
+    if (isListFilter && !lists.includes(filter.slice("list:".length))) {
+      onFilterChange("all");
     }
-  }, [lists, listFilter]);
+  }, [filter, lists, onFilterChange]);
 
   const term = search.trim().toLowerCase();
+  const today = startOfDay(new Date());
+
+  const matchesFilter = (t: Task) => {
+    if (filter === "today") {
+      if (!t.scheduledAt) return false;
+      const d = new Date(t.scheduledAt);
+      return !isNaN(d.getTime()) && isSameDay(d, new Date());
+    }
+    if (filter === "scheduled") {
+      if (!t.scheduledAt) return false;
+      return !isNaN(new Date(t.scheduledAt).getTime());
+    }
+    if (filter === "overdue") {
+      if (!t.scheduledAt || t.completed) return false;
+      const d = new Date(t.scheduledAt);
+      return !isNaN(d.getTime()) && isBefore(d, today);
+    }
+    if (filter.startsWith("list:")) {
+      return t.list === filter.slice("list:".length);
+    }
+    return true;
+  };
+
   const filtered = tasks.filter((t) => {
-    if (listFilter !== "all" && t.list !== listFilter) return false;
+    if (!matchesFilter(t)) return false;
     if (!term) return true;
     return (
       t.title.toLowerCase().includes(term) ||
@@ -80,6 +150,14 @@ export default function TaskList() {
 
   const incomplete = filtered.filter((t) => !t.completed);
   const completed = filtered.filter((t) => t.completed);
+
+  const activeList = filter.startsWith("list:")
+    ? filter.slice("list:".length)
+    : null;
+  const activeFilterLabel = activeList
+    ? activeList
+    : FILTERS.find((f) => f.value === filter)?.label ?? "All";
+  const heading = total === 0 ? "All Tasks" : `${activeFilterLabel} Tasks`;
 
   const handleToggleComplete = async (task: Task, value: boolean) => {
     const previous = tasks;
@@ -109,7 +187,7 @@ export default function TaskList() {
   return (
     <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h1 className="text-lg font-semibold md:text-2xl">All Tasks</h1>
+        <h1 className="text-lg font-semibold md:text-2xl">{heading}</h1>
         <div className="flex items-center gap-2">
           <input
             type="search"
@@ -132,17 +210,24 @@ export default function TaskList() {
       {error ? (
         <div className="py-8 text-center text-muted-foreground" role="alert">
           <p>{error}</p>
-          <Button
-            variant="outline"
-            className="mt-4"
-            onClick={() => {
-              setSearch("");
-              setListFilter("all");
-              refresh();
-            }}
-          >
-            Retry
-          </Button>
+          <div className="mt-4 flex justify-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSearch("");
+                onFilterChange("all");
+                refresh();
+              }}
+            >
+              Retry
+            </Button>
+            <Button
+              variant="default"
+              onClick={() => router.replace("/login")}
+            >
+              Go to Login
+            </Button>
+          </div>
         </div>
       ) : loading ? (
         <TaskItemsSkeleton />
@@ -192,24 +277,25 @@ export default function TaskList() {
             </p>
           </section>
 
-          {/* List Filter */}
-          {lists.length > 0 && (
-            <div className="flex flex-wrap gap-2" aria-label="Filter by list">
+          {/* Filter chips */}
+          <div className="flex flex-wrap gap-2" aria-label="Filter tasks">
+            {FILTERS.map((f) => (
               <FilterChip
-                active={listFilter === "all"}
-                onClick={() => setListFilter("all")}
-                label="All"
+                key={f.value}
+                active={filter === f.value}
+                onClick={() => onFilterChange(f.value)}
+                label={f.label}
               />
-              {lists.map((list) => (
-                <FilterChip
-                  key={list}
-                  active={listFilter === list}
-                  onClick={() => setListFilter(list)}
-                  label={list}
-                />
-              ))}
-            </div>
-          )}
+            ))}
+            {lists.map((list) => (
+              <FilterChip
+                key={list}
+                active={filter === `list:${list}`}
+                onClick={() => onFilterChange(`list:${list}`)}
+                label={list}
+              />
+            ))}
+          </div>
 
           {/* Incomplete Tasks */}
           <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
@@ -226,7 +312,7 @@ export default function TaskList() {
               ))
             ) : (
               <p className="text-muted-foreground">
-                {term || listFilter !== "all"
+                {term || filter !== "all"
                   ? "No matching tasks"
                   : "No tasks yet — add one below!"}
               </p>
@@ -343,6 +429,7 @@ function TaskItem({
         </label>
       </div>
       <div className="flex items-center gap-1 shrink-0">
+        {task.scheduledAt && <DueLabel task={task} />}
         {edit && (
           <>
             <Dialog>
@@ -395,6 +482,52 @@ function TaskItem({
       </div>
     </div>
   );
+}
+
+// --------------------------------------------------------------------------------------
+
+function DueLabel({ task }: { task: Task }) {
+  const { scheduledAt, completed } = task;
+  const due = scheduledAt ? new Date(scheduledAt) : null;
+  const invalid = !due || isNaN(due.getTime());
+  if (invalid || !due) return null;
+
+  const today = new Date();
+  let label: string;
+  let tone: string;
+
+  if (isSameDay(due, today)) {
+    label = "Today";
+    tone = completed
+      ? "text-muted-foreground"
+      : "text-amber-600";
+  } else if (!completed && isBefore(due, startOfDay(today))) {
+    label = `Overdue`;
+    tone = "text-red-600";
+  } else {
+    label = dateFnsFormat(due);
+    tone = completed ? "text-muted-foreground" : "text-muted-foreground";
+  }
+
+  return (
+    <span
+      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${tone}`}
+      title={due.toLocaleString()}
+    >
+      <CalendarDays className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
+function dateFnsFormat(date: Date): string {
+  const today = startOfDay(new Date());
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+  if (isSameDay(date, tomorrow)) return "Tomorrow";
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 // --------------------------------------------------------------------------------------

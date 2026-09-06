@@ -1,4 +1,4 @@
-import Link from "next/link";
+"use client";
 import React from "react";
 import { Badge } from "../../ui/badge";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
@@ -7,42 +7,69 @@ import { Button } from "../../ui/button";
 import { SideBarDataType } from "@/types";
 import { TagsAccordian } from "./TagsAccordian";
 import CreateListDialog from "./CreateListDialog";
+import type { TaskStats } from "../Dashboard";
 
 import AddCircleIcon from "@/public/svg/icons/AddCircleIcon";
+import { cn } from "@/lib/utils";
+
+const FILTER_BY_NAME: Record<string, string> = {
+  Inbox: "all",
+  Today: "today",
+  Scheduled: "scheduled",
+  "Filter & Label": "all",
+};
 
 export const SideBarItems = ({
   SideBarList,
   listNames,
+  activeFilter,
+  onSelectFilter,
+  stats,
 }: {
   SideBarList: SideBarDataType[];
   listNames: SideBarDataType[];
+  activeFilter: string;
+  onSelectFilter: (filter: string) => void;
+  stats: TaskStats;
 }) => {
   return (
     <>
       {/* list of inbox, today, scheduled, filter & label */}
-      {SideBarList.map(({ name, icon }, id) => (
-        <Link
-          key={id}
-          href="#"
-          className="flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary"
-        >
-          {icon} {name}
-          {name === "Today" || name === "Scheduled" ? (
-            <Badge className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
-              10
-            </Badge>
-          ) : null}
-        </Link>
-      ))}
+      {SideBarList.map(({ name, icon }, id) => {
+        const value = FILTER_BY_NAME[name] ?? "all";
+        const count = name === "Today" ? stats.today : name === "Scheduled" ? stats.scheduled : 0;
+        return (
+          <button
+            key={id}
+            onClick={() => onSelectFilter(value)}
+            aria-pressed={activeFilter === value}
+            className={cn(
+              "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+              activeFilter === value && "bg-muted text-primary"
+            )}
+          >
+            {icon} {name}
+            {count > 0 ? (
+              <Badge className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
+                {count}
+              </Badge>
+            ) : null}
+          </button>
+        );
+      })}
       <Separator />
 
       {/* List: Default Section */}
-      <Link
-        href="#"
-        className="flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary border my-2"
+      <button
+        onClick={() => onSelectFilter(`list:${listNames[0].name}`)}
+        aria-pressed={activeFilter === `list:${listNames[0].name}`}
+        className={cn(
+          "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary border my-2",
+          activeFilter === `list:${listNames[0].name}` && "bg-muted text-primary"
+        )}
       >
         {listNames[0].icon} {listNames[0].name}
-      </Link>
+      </button>
 
       <Separator />
 
@@ -51,13 +78,17 @@ export const SideBarItems = ({
       {listNames
         .filter((_, id) => id !== 0)
         .map(({ name, icon }, id) => (
-          <Link
+          <button
             key={id}
-            href="#"
-            className="capitalize flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary"
+            onClick={() => onSelectFilter(`list:${name}`)}
+            aria-pressed={activeFilter === `list:${name}`}
+            className={cn(
+              "capitalize flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+              activeFilter === `list:${name}` && "bg-muted text-primary"
+            )}
           >
             {icon} {name}
-          </Link>
+          </button>
         ))}
 
       <Dialog>

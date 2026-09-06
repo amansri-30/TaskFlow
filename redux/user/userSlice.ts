@@ -100,7 +100,15 @@ export const getCurrentUser = createAsyncThunk(
 const userSlice = createSlice({
   name: "user",
   initialState,
-  reducers: {},
+  reducers: {
+    resetUser: (state) => {
+      state.user = null;
+      state.isAuthenticated = false;
+      state.isLoading = false;
+      state.error = null;
+      state.message = null;
+    },
+  },
   extraReducers: (builder) => {
     builder
       .addCase(loginUser.pending, (state) => {
@@ -159,10 +167,11 @@ const userSlice = createSlice({
           state.error = null;
         }
       )
-      .addCase(getCurrentUser.rejected, (state) => {
+      .addCase(getCurrentUser.rejected, (state, action) => {
         state.isLoading = false;
         state.isAuthenticated = false;
-        state.error = "User not found. Please try logging in.";
+        state.error =
+          (action.payload as string) || "User not found. Please try logging in.";
         state.user = null;
       });
   },

@@ -26,10 +26,14 @@ export default function SearchAreaWithAvatarDropdown({
   activeFilter,
   onSelectFilter,
   stats,
+  search,
+  onSearchChange,
 }: {
   activeFilter: string;
   onSelectFilter: (filter: string) => void;
   stats: TaskStats;
+  search: string;
+  onSearchChange: (value: string) => void;
 }) {
   const user = useAppSelector((state) => state.user.user?.name);
   const [quote, setQuote] = useState<string>("");
@@ -75,6 +79,8 @@ export default function SearchAreaWithAvatarDropdown({
               type="search"
               placeholder="Search tasks..."
               aria-label="Search tasks"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
               className="w-full appearance-none bg-background pl-8 shadow-none md:w-2/3 lg:w-1/3 ring-inset"
             />
             <h3 className="hidden md:block mx-auto font-semibold">

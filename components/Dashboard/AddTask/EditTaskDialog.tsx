@@ -44,6 +44,7 @@ export function EditTaskDialogContent({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || "");
   const [list, setList] = useState(task.list);
+  const [priority, setPriority] = useState<string>(task.priority || "medium");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(() => {
     const raw = task.scheduledAt ?? task.date;
     if (!raw) return undefined;
@@ -69,6 +70,7 @@ export function EditTaskDialogContent({
         taskTitle: title,
         description,
         list,
+        priority,
         dueDate: selectedDate?.toISOString(),
       });
       toast.success("Task updated successfully");
@@ -128,6 +130,31 @@ export function EditTaskDialogContent({
                   {item.name}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="flex justify-center items-center gap-1">
+            <SearchList02Icon />
+            <Label htmlFor="priority" className="text-right">
+              Priority
+            </Label>
+          </div>
+          <Select value={priority} onValueChange={setPriority}>
+            <SelectTrigger className="ring-inset min-w-[150px]">
+              <SelectValue placeholder="Medium" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="low" className="capitalize">
+                Low
+              </SelectItem>
+              <SelectItem value="medium" className="capitalize">
+                Medium
+              </SelectItem>
+              <SelectItem value="high" className="capitalize">
+                High
+              </SelectItem>
             </SelectContent>
           </Select>
         </div>

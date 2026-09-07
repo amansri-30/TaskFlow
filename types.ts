@@ -29,6 +29,7 @@ export type Task = {
   title: string;
   description?: string;
   list: string;
+  priority?: "low" | "medium" | "high";
   date?: string;
   scheduledAt?: string;
   completed?: boolean;

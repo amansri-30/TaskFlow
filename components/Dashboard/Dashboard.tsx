@@ -13,6 +13,7 @@ export type TaskStats = {
 export function Dashboard() {
   const [filter, setFilter] = useState<string>("all");
   const [stats, setStats] = useState<TaskStats>({ today: 0, scheduled: 0 });
+  const [search, setSearch] = useState<string>("");
 
   return (
     // Side Bar Todo List
@@ -28,9 +29,17 @@ export function Dashboard() {
           activeFilter={filter}
           onSelectFilter={setFilter}
           stats={stats}
+          search={search}
+          onSearchChange={setSearch}
         />
         {/* // dispaly task items */}
-        <TaskList filter={filter} onFilterChange={setFilter} onStatsChange={setStats} />
+        <TaskList
+          filter={filter}
+          onFilterChange={setFilter}
+          onStatsChange={setStats}
+          search={search}
+          onSearchChange={setSearch}
+        />
       </div>
     </div>
   );

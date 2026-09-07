@@ -23,6 +23,7 @@ import {
   Circle,
   ListChecks,
   CalendarDays,
+  Flag,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore } from "date-fns";
 
@@ -47,10 +48,14 @@ export default function TaskList({
   filter,
   onFilterChange,
   onStatsChange,
+  search,
+  onSearchChange,
 }: {
   filter: string;
   onFilterChange: (filter: string) => void;
   onStatsChange: (stats: TaskStats) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
 }) {
   const router = useRouter();
   const dispatch = useAppDispatch();
@@ -58,7 +63,6 @@ export default function TaskList({
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
-  const [search, setSearch] = useState<string>("");
   const [refreshKey, setRefreshKey] = useState<number>(0);
 
   const fetchTasks = useCallback(async () => {
@@ -150,6 +154,12 @@ export default function TaskList({
 
   const incomplete = filtered.filter((t) => !t.completed);
   const completed = filtered.filter((t) => t.completed);
+  const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const sortedIncomplete = [...incomplete].sort(
+    (a, b) =>
+      (priorityRank[a.priority || "medium"] ?? 1) -
+      (priorityRank[b.priority || "medium"] ?? 1)
+  );
 
   const activeList = filter.startsWith("list:")
     ? filter.slice("list:".length)
@@ -194,7 +204,7 @@ export default function TaskList({
             placeholder="Search tasks..."
             aria-label="Search tasks"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => onSearchChange(e.target.value)}
             className="h-9 w-40 md:w-56 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           <Button
@@ -214,7 +224,7 @@ export default function TaskList({
             <Button
               variant="outline"
               onClick={() => {
-                setSearch("");
+                onSearchChange("");
                 onFilterChange("all");
                 refresh();
               }}
@@ -299,8 +309,8 @@ export default function TaskList({
 
           {/* Incomplete Tasks */}
           <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
-            {incomplete.length > 0 ? (
-              incomplete.map((task) => (
+            {sortedIncomplete.length > 0 ? (
+              sortedIncomplete.map((task) => (
                 <TaskItem
                   key={task.id}
                   task={task}
@@ -429,6 +439,9 @@ function TaskItem({
         </label>
       </div>
       <div className="flex items-center gap-1 shrink-0">
+        {task.priority && task.priority !== "medium" && (
+          <PriorityChip priority={task.priority} completed={!!task.completed} />
+        )}
         {task.scheduledAt && <DueLabel task={task} />}
         {edit && (
           <>
@@ -481,6 +494,34 @@ function TaskItem({
         )}
       </div>
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+
+function PriorityChip({
+  priority,
+  completed,
+}: {
+  priority: NonNullable<Task["priority"]>;
+  completed: boolean;
+}) {
+  const tone =
+    priority === "high"
+      ? "text-red-600 border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
+      : priority === "low"
+      ? "text-sky-600 border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/40"
+      : "text-amber-600 border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40";
+
+  return (
+    <span
+      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs capitalize ${
+        completed ? "opacity-50" : ""
+      } ${tone}`}
+    >
+      <Flag className="h-3 w-3" />
+      {priority}
+    </span>
   );
 }
 

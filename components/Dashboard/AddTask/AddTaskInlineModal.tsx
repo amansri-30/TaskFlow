@@ -43,6 +43,7 @@ const FormSchema = z.object({
   description: z.string().optional().default(""),
   dueDate: z.date().optional(),
   list: z.string().default(""),
+  priority: z.enum(["low", "medium", "high"]).default("medium"),
 });
 
 type AddTaskInlineModalProps = {
@@ -61,6 +62,7 @@ export function AddTaskInlineModal({
       description: "",
       dueDate: undefined,
       list: "default",
+      priority: "medium",
     },
   });
 
@@ -70,6 +72,7 @@ export function AddTaskInlineModal({
       description: data.description,
       dueDate: data.dueDate ?? null,
       list: data.list,
+      priority: data.priority,
     };
 
     try {
@@ -195,6 +198,35 @@ export function AddTaskInlineModal({
                       {item.name}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="priority"
+          render={({ field }) => (
+            <FormItem>
+              <Select
+                onValueChange={field.onChange}
+                defaultValue={field.value}
+              >
+                <FormControl>
+                  <SelectTrigger className="ring-inset lg:min-w-[220px] lg:max-w-full xl:min-w-[300px]">
+                    <SelectValue placeholder="Priority" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="low" className="capitalize">
+                    Low
+                  </SelectItem>
+                  <SelectItem value="medium" className="capitalize">
+                    Medium
+                  </SelectItem>
+                  <SelectItem value="high" className="capitalize">
+                    High
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </FormItem>

@@ -10,6 +10,7 @@ const mapTask = (t: any) => ({
   title: t.title,
   description: t.description,
   list: t.list,
+  priority: t.priority,
   scheduledAt: t.scheduledAt,
   completed: t.completed,
   createdAt: t.createdAt,
@@ -34,10 +35,15 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, dueDate, list } = req.body;
+      const { taskTitle, description, dueDate, list, priority } = req.body;
+      const validPriorities = ["low", "medium", "high"];
+      if (priority && !validPriorities.includes(priority)) {
+        return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
+      }
       task.title = taskTitle ?? task.title;
       if (description !== undefined) task.description = description;
       if (list !== undefined) task.list = list;
+      if (priority !== undefined) task.priority = priority;
       if (dueDate !== undefined) task.scheduledAt = dueDate || null;
       task.updatedAt = new Date();
       await task.save();

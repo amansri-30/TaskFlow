@@ -11,9 +11,14 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, dueDate, list } = req.body;
+    const { taskTitle, description, dueDate, list, priority } = req.body;
 
     if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
+
+    const validPriorities = ["low", "medium", "high"];
+    if (priority && !validPriorities.includes(priority)) {
+      return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
+    }
 
     const user = await isAuthenticated(req, res);
     if (!user) return handleRes(res, 401, false, "No account is logged in");
@@ -24,6 +29,7 @@ const newTask = catchAsyncError(
       user: user._id,
       scheduledAt: dueDate,
       list,
+      priority: priority || "medium",
     });
 
     handleRes(res, 200, true, "Task created successfully");

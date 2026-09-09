@@ -10,10 +10,10 @@ import BuyMeACoffeeBrandLogo from "@/public/svg/icons/BuyMeACoffeeBrandLogo";
 
 export default function FooterIconLink() {
   const BuyMeCoffeeText = [
-    "Support Me ☕️",
-    "Fuel My Day 💪",
-    "Recharge Me ☕️",
-    "Boost My Energy 🚀",
+    "Support TaskFlow ☕️",
+    "Fuel Our Day 💪",
+    "Recharge Us ☕️",
+    "Boost Our Energy 🚀",
     "Coffee Break! ☕️",
   ];
 
@@ -36,16 +36,16 @@ export default function FooterIconLink() {
       <Separator className="sm:hidden my-3 border-[#C8C8C8] dark:bg-neutral-700" />
       <div className="flex justify-center items-center gap-2">
         <ToolTipIcon
-          name="Visit My Portfolio"
+          name="Visit our GitHub"
           triggerJsxElement={
-            <Link href={"https://portfolio-rishabhgokhe.vercel.app/"}>
+            <Link href={"https://github.com/amansri-30/TaskFlow"}>
               <Button
                 size={"sm"}
                 className="portfolio-button gap-1 shadow-lg"
                 variant={"outline"}
               >
                 <CircleArrowUpRightIcon />
-                Portfolio
+                GitHub
               </Button>
             </Link>
           }
@@ -59,9 +59,7 @@ export default function FooterIconLink() {
               size={"sm"}
               className="buy-me-coffee-button gap-1 shadow-lg dark:hover:bg-gradient-to-r from-[#281D24] to-[#281D24]"
               variant={"outline"}
-              onClick={() =>
-                window.open("https://buymeacoffee.com/rishabhgokhe", "_blank")
-              }
+              onClick={() => window.open("/buy-a-coffee", "_self")}
             >
               <BuyMeACoffeeBrandLogo />
             </Button>

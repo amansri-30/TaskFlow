@@ -97,6 +97,7 @@ export function EditTaskDialogContent({
             id="title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
+            maxLength={120}
             className="ring-inset"
           />
         </div>
@@ -109,6 +110,7 @@ export function EditTaskDialogContent({
             id="description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            maxLength={100}
             className="line-clamp-3 ring-inset"
           />
         </div>

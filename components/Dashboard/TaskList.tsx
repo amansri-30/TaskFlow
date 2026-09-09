@@ -25,11 +25,20 @@ import {
   CalendarDays,
   Flag,
   CheckCheck,
+  ArrowUpDown,
+  Download,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore } from "date-fns";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { TaskStats } from "./Dashboard";
 import { useAppDispatch } from "@/hooks";
 import { userActions } from "@/redux/user/userSlice";
@@ -43,6 +52,15 @@ const FILTERS = [
   { value: "today", label: "Today" },
   { value: "scheduled", label: "Scheduled" },
   { value: "overdue", label: "Overdue" },
+];
+
+type SortMode = "smart" | "priority" | "due" | "newest" | "title";
+const SORT_OPTIONS: { value: SortMode; label: string }[] = [
+  { value: "smart", label: "Smart (priority + due)" },
+  { value: "priority", label: "Priority" },
+  { value: "due", label: "Due date" },
+  { value: "newest", label: "Newest first" },
+  { value: "title", label: "Title A–Z" },
 ];
 
 export default function TaskList({
@@ -66,6 +84,7 @@ export default function TaskList({
   const [edit, setEdit] = useState<boolean>(false);
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
+  const [sort, setSort] = useState<SortMode>("smart");
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -166,13 +185,47 @@ export default function TaskList({
     t.scheduledAt && !isNaN(new Date(t.scheduledAt).getTime())
       ? new Date(t.scheduledAt).getTime()
       : Number.MAX_SAFE_INTEGER;
+  const createdAtTime = (t: Task) =>
+    !t.createdAt || isNaN(new Date(t.createdAt).getTime())
+      ? 0
+      : new Date(t.createdAt).getTime();
   const sortedIncomplete = [...incomplete].sort((a, b) => {
     const rank =
       (priorityRank[a.priority || "medium"] ?? 1) -
       (priorityRank[b.priority || "medium"] ?? 1);
+    if (sort === "newest") return createdAtTime(b) - createdAtTime(a);
+    if (sort === "title") return a.title.localeCompare(b.title);
+    const dueDiff = dueTime(a) - dueTime(b);
+    if (sort === "due") {
+      if (dueDiff !== 0) return dueDiff;
+      return rank;
+    }
+    if (sort === "priority") return rank;
     if (rank !== 0) return rank;
-    return dueTime(a) - dueTime(b);
+    return dueDiff;
   });
+
+  const handleExport = () => {
+    if (filtered.length === 0) return;
+    const payload = {
+      app: "TaskFlow",
+      exportedAt: new Date().toISOString(),
+      count: filtered.length,
+      tasks: filtered,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `taskflow-tasks-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filtered.length} task${filtered.length > 1 ? "s" : ""}`);
+  };
 
   const activeList = filter.startsWith("list:")
     ? filter.slice("list:".length)
@@ -375,6 +428,36 @@ export default function TaskList({
               Clear completed
               <span className="ml-1 text-muted-foreground">({completedCount})</span>
             </Button>
+            <div className="flex items-center gap-1.5">
+              <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+              <Select value={sort} onValueChange={(v) => setSort(v as SortMode)}>
+                <SelectTrigger
+                  className="h-8 min-w-[180px] gap-1"
+                  aria-label="Sort tasks"
+                >
+                  <SelectValue placeholder="Sort" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SORT_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+            >
+              <Download className="mr-1.5 h-4 w-4" />
+              Export
+            </Button>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {filtered.length} shown
+            </span>
           </div>
 
           {/* Clear completed confirmation */}

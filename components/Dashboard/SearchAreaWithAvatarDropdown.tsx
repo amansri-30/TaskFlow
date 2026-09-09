@@ -86,7 +86,9 @@ export default function SearchAreaWithAvatarDropdown({
             <h3 className="hidden md:block mx-auto font-semibold">
               {user ? `Welcome back, ${user}` : null}
             </h3>
-            <p className="hidden md:block mx-auto font-semibold">{quote}</p>
+            {quote ? (
+              <p className="hidden md:block mx-auto font-semibold">{quote}</p>
+            ) : null}
           </div>
         </form>
       </div>

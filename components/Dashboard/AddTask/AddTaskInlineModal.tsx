@@ -110,6 +110,7 @@ export function AddTaskInlineModal({
                 <FormControl>
                   <Input
                     placeholder="Task Title"
+                    maxLength={120}
                     className="ring-inset rounded-bl-none rounded-br-none border-b-0"
                     {...field}
                   />
@@ -127,6 +128,7 @@ export function AddTaskInlineModal({
               <FormControl>
                 <Textarea
                   placeholder="Description"
+                  maxLength={100}
                   className="resize-none ring-inset rounded-tl-none rounded-tr-none border-dashed"
                   {...field}
                 />

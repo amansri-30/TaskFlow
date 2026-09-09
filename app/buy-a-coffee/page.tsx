@@ -7,7 +7,6 @@ import BannerImage from "@/public/images/TaskFlow Banner.png";
 import { motion } from "framer-motion";
 import Coffee01Icon from "@/public/svg/icons/Coffee01Icon";
 import BuyMeACoffeeBrandLogo from "@/public/svg/icons/BuyMeACoffeeBrandLogo";
-import { iconLinkData } from "@/lib/Data";
 import CustomLinkButton from "@/components/elements/CustomLinkButton";
 import { baseRedColor } from "@/lib/Colors";
 
@@ -48,7 +47,7 @@ export default function SupportMe() {
           className="text-3xl md:text-4xl font-bold text-gray-800 dark:text-white mb-8"
           variants={itemVariants}
         >
-          Support <span className={`text-red-500`}>Me</span>
+          Support <span className={`text-red-500`}>TaskFlow</span>
         </motion.h1>
         <motion.div
           className="text-gray-700 dark:text-gray-300 space-y-8"
@@ -58,8 +57,8 @@ export default function SupportMe() {
             className="text-base md:text-lg leading-relaxed mb-6"
             variants={itemVariants}
           >
-            Your support enables me to create valuable content and resources for
-            free, helping people improve their productivity and organization.
+            Your support helps keep TaskFlow free and lets us continue building
+            useful tools that improve your productivity and organization.
           </motion.p>
           <motion.h2
             className="text-lg md:text-xl font-semibold text-gray-800 dark:text-white mb-4"
@@ -100,12 +99,15 @@ export default function SupportMe() {
             <motion.div>
               <CustomLinkButton
                 onClick={() =>
-                  window.open("https://buymeacoffee.com/rishabhgokhe", "_blank")
+                  window.open(
+                    "https://github.com/amansri-30/TaskFlow",
+                    "_blank"
+                  )
                 }
                 leftIcon={<Coffee01Icon />}
                 className="mb-2"
               >
-                Buy me a coffee
+                Support the project on GitHub
               </CustomLinkButton>
             </motion.div>
 
@@ -122,27 +124,17 @@ export default function SupportMe() {
             className="text-lg md:text-xl font-semibold text-gray-800 dark:text-white mb-4"
             variants={itemVariants}
           >
-            About Me
+            About TaskFlow
           </motion.h2>
           <motion.p
             className="text-base md:text-lg leading-relaxed mb-6"
             variants={itemVariants}
           >
-            Hi there! 👋 I&apos;m{" "}
-            <a
-              className="font-semibold hover:text-green-500 transition ease-in-out duration-500"
-              href={iconLinkData[0].link}
-            >
-              Rishabh Gokhe
-            </a>
-            , the developer behind TaskFlow. I&apos;m passionate about creating
-            useful and user-friendly web applications that help people improve
-            their productivity and organization. I&apos;m always learning new
-            technologies to enhance my skills and deliver better solutions.
-            TaskFlow is a project born out of my desire to create a simple yet
-            powerful tool for managing tasks. I believe that staying organized
-            is key to success, and TaskFlow is designed to help users achieve
-            just that.
+            TaskFlow is a task management app built to help people improve their
+            daily productivity and organization. It combines a clean interface
+            with the core tools you need to plan your day: tasks, priorities,
+            due dates, lists, and filters. We are always experimenting with new
+            ideas to make staying organized simpler and more enjoyable.
           </motion.p>
         </motion.div>
       </motion.div>

@@ -58,7 +58,7 @@ export default function ReleaseNote() {
             <h5 className="mb-2 text-muted-foreground">
               Visit{" "}
               <span className="text-blue-500 cursor-pointer">
-                <a href="https://github.com/users/rishabhgokhe/projects/2">
+                <a href="https://github.com/amansri-30/TaskFlow/releases">
                   here
                 </a>
               </span>{" "}

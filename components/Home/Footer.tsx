@@ -29,11 +29,11 @@ export default function Footer() {
         <p>
           © {new Date().getFullYear()} Copyright:{" "}
           <span className="font-bold text-xl dark:text-white">
-            Rishabh Gokhe
+            TaskFlow
           </span>
         </p>
         {/* <p className="text-xl sm:text-2xl font-bold playwrite text-center sm:text-left text-[var(--text-light)] dark:text-[var(--text-dark)]">
-        Developed by Rishabh Gokhe
+        Developed by TaskFlow Team
       </p> */}
 
         <FooterIconLink />

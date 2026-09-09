@@ -3,13 +3,13 @@ import PageTemplate from "@/components/elements/PageTemplate";
 import React from "react";
 import { motion } from "framer-motion";
 import CustomLinkButton from "@/components/elements/CustomLinkButton";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { aboutData } from "@/lib/Data";
 import { baseRedColor } from "@/lib/Colors";
+import { Flower } from "lucide-react";
 
 import MailOpenIcon from "@/public/svg/icons/MailOpenIcon";
-import UserCircleIcon from "@/public/svg/icons/UserCircleIcon";
 import AppleFinderIcon from "@/public/svg/icons/AppleFinderIcon";
 import {FadeDown} from "animease";
 
@@ -50,22 +50,21 @@ export default function About() {
           variants={itemVariants}
         >
           <Avatar className="w-28 md:w-40 h-28 md:h-40 mb-2 md:mb-4">
-            <AvatarImage src="https://avatars.githubusercontent.com/u/120303705?v=4" />
-            <AvatarFallback>
-              <UserCircleIcon className="w-full h-full text-gray-300" />
+            <AvatarFallback className="bg-transparent">
+              <Flower className="w-full h-full p-4 text-emerald-500" />
             </AvatarFallback>
           </Avatar>
           <motion.div
             className="text-lg md:text-xl text-gray-800 dark:text-white font-semibold"
             variants={itemVariants}
           >
-            Rishabh Gokhe
+            TaskFlow Team
           </motion.div>
           <motion.div
             className="text-sm md:text-base text-gray-600 dark:text-gray-400"
             variants={itemVariants}
           >
-            Founder
+            Builders & Contributors
           </motion.div>
         </motion.div>
         <motion.p

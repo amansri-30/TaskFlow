@@ -12,10 +12,6 @@ import WorkUpdateIcon from "@/public/svg/icons/WorkUpdateIcon";
 import VegetarianFoodIcon from "@/public/svg/icons/VegetarianFoodIcon";
 
 import GithubIcon from "@/public/svg/icons/GithubIcon";
-import InstagramIcon from "@/public/svg/icons/InstagramIcon";
-import Linkedin01Icon from "@/public/svg/icons/Linkedin01Icon";
-import NewTwitterRectangleIcon from "@/public/svg/icons/NewTwitterRectangleIcon";
-import MailAdd02Icon from "@/public/svg/icons/MailAdd02Icon";
 
 import InformationCircleIcon from "@/public/svg/icons/InformationCircleIcon";
 import StickyNote02Icon from "@/public/svg/icons/StickyNote02Icon";
@@ -118,33 +114,8 @@ export const tasks = [
 export const iconLinkData = [
   {
     name: "Github",
-    link: "https://github.com/rishabhgokhe",
+    link: "https://github.com/amansri-30/TaskFlow",
     icon: <GithubIcon />,
-  },
-  {
-    name: "Instagram",
-    link: "https://instagram.com/rishabh_gokhe?igshid=OGQ5ZDc2ODk2ZA%3D%3D&utm_source=qr",
-    icon: <InstagramIcon />,
-  },
-  // {
-  //   name: "Reddit",
-  //   link: "https://www.reddit.com/u/DiscoversOther9152/s/kS20bBPbSF",
-  //   icon: <RedditIcon />,
-  // },
-  {
-    name: "Linkedin",
-    link: "https://www.linkedin.com/in/rishabh-gokhe-22168b287",
-    icon: <Linkedin01Icon />,
-  },
-  {
-    name: "X / Twitter",
-    link: "https://twitter.com/rishabhgokhe?s=21&t=Flej6ro1R2UhXzVpOMJTdg",
-    icon: <NewTwitterRectangleIcon />,
-  },
-  {
-    name: "Mail Us",
-    link: `mailto:rishabhgokhe20contact@gmail.com`,
-    icon: <MailAdd02Icon />,
   },
 ];
 
@@ -188,7 +159,7 @@ export const aboutData = {
   welcomeText:
     "Welcome to TaskFlow, your ultimate solution for managing tasks efficiently and effectively. Our platform is designed to help you stay organized, prioritize your work, and achieve your goals seamlessly. Whether you are a professional looking to manage your projects or a student organizing your study schedule, TaskFlow has got you covered.",
   founderText:
-    "Founded by Rishabh Gokhe, a passionate Full-Stack Developer and Computer Science and Engineering student, TaskFlow aims to revolutionize task management and productivity tools. With a deep commitment to technology and innovation, Rishabh's vision is to create a platform that empowers individuals to excel in the digital era.",
+    "TaskFlow is a task management platform built by a small team of developers who love productivity tools. Our goal is to make organizing daily life simple, fast, and even enjoyable. TaskFlow is continuously improved based on real user feedback, and we are excited to keep building features that help you achieve more.",
   missionText:
     "At TaskFlow, we believe in simplifying task management and enhancing productivity through intuitive tools and thoughtful design. Our mission is to empower individuals and teams to achieve more by providing a seamless and enjoyable task management experience.",
   whatWeOffer: [

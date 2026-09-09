@@ -4,6 +4,8 @@ import cookie from "cookie";
 export function saveCookie(res: NextApiResponse, token: string | null, set: boolean) {
     res.setHeader('Set-Cookie', cookie.serialize("token", set && token ? token : "", {
         httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
         path: "/",
         maxAge: set ? 60 * 60 * 24 * 10 : 0 // 10 Days
     }));

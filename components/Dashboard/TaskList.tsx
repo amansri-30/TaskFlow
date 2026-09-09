@@ -24,6 +24,7 @@ import {
   ListChecks,
   CalendarDays,
   Flag,
+  CheckCheck,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore } from "date-fns";
 
@@ -64,6 +65,7 @@ export default function TaskList({
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
   const [refreshKey, setRefreshKey] = useState<number>(0);
+  const [confirmClear, setConfirmClear] = useState<boolean>(false);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -74,6 +76,11 @@ export default function TaskList({
     } catch (err: any) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         dispatch(userActions.resetUser());
+        try {
+          await axios.post("/api/auth/logout");
+        } catch {
+          // ignore - cookie may already be gone
+        }
         toast.error("Your session has expired. Please log in again.");
         router.replace("/login");
         return;
@@ -155,11 +162,17 @@ export default function TaskList({
   const incomplete = filtered.filter((t) => !t.completed);
   const completed = filtered.filter((t) => t.completed);
   const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
-  const sortedIncomplete = [...incomplete].sort(
-    (a, b) =>
+  const dueTime = (t: Task) =>
+    t.scheduledAt && !isNaN(new Date(t.scheduledAt).getTime())
+      ? new Date(t.scheduledAt).getTime()
+      : Number.MAX_SAFE_INTEGER;
+  const sortedIncomplete = [...incomplete].sort((a, b) => {
+    const rank =
       (priorityRank[a.priority || "medium"] ?? 1) -
-      (priorityRank[b.priority || "medium"] ?? 1)
-  );
+      (priorityRank[b.priority || "medium"] ?? 1);
+    if (rank !== 0) return rank;
+    return dueTime(a) - dueTime(b);
+  });
 
   const activeList = filter.startsWith("list:")
     ? filter.slice("list:".length)
@@ -191,6 +204,38 @@ export default function TaskList({
     } catch {
       setTasks(previous);
       toast.error("Failed to delete task");
+    }
+  };
+
+  const handleCompleteAll = async () => {
+    const pending = tasks.filter((t) => !t.completed);
+    if (pending.length === 0) return;
+    const previous = tasks;
+    setTasks((prev) => prev.map((t) => ({ ...t, completed: true })));
+    try {
+      await Promise.all(
+        pending.map((t) =>
+          axios.patch(`/api/task/${t.id}`, { completed: true })
+        )
+      );
+      toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to complete all tasks");
+    }
+  };
+
+  const handleClearCompleted = async () => {
+    const done = tasks.filter((t) => t.completed);
+    if (done.length === 0) return;
+    const previous = tasks;
+    setTasks((prev) => prev.filter((t) => !t.completed));
+    try {
+      await Promise.all(done.map((t) => axios.delete(`/api/task/${t.id}`)));
+      toast.success("Cleared completed tasks");
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to clear completed tasks");
     }
   };
 
@@ -306,6 +351,59 @@ export default function TaskList({
               />
             ))}
           </div>
+
+          {/* Bulk actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleCompleteAll}
+              disabled={pendingCount === 0}
+            >
+              <CheckCheck className="mr-1.5 h-4 w-4" />
+              Complete all
+              <span className="ml-1 text-muted-foreground">({pendingCount})</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setConfirmClear(true)}
+              disabled={completedCount === 0}
+              className="text-red-600 hover:text-red-600"
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              Clear completed
+              <span className="ml-1 text-muted-foreground">({completedCount})</span>
+            </Button>
+          </div>
+
+          {/* Clear completed confirmation */}
+          <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
+            <DialogContent className="sm:max-w-[400px]">
+              <DialogHeader>
+                <DialogTitle>Clear completed tasks?</DialogTitle>
+                <DialogDescription>
+                  This will permanently delete {completedCount} completed
+                  task{completedCount === 1 ? "" : "s"}. This action cannot be
+                  undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="flex gap-2 sm:justify-end">
+                <Button variant="outline" onClick={() => setConfirmClear(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmClear(false);
+                    handleClearCompleted();
+                  }}
+                >
+                  Clear
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {/* Incomplete Tasks */}
           <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
@@ -438,60 +536,60 @@ function TaskItem({
           {task.title}
         </label>
       </div>
-      <div className="flex items-center gap-1 shrink-0">
+      <div
+        className={`flex items-center gap-1 shrink-0 transition-opacity ${
+          edit ? "" : "opacity-0 group-hover:opacity-100"
+        }`}
+      >
         {task.priority && task.priority !== "medium" && (
           <PriorityChip priority={task.priority} completed={!!task.completed} />
         )}
         {task.scheduledAt && <DueLabel task={task} />}
-        {edit && (
-          <>
-            <Dialog>
-              <DialogTrigger asChild>
-                <button aria-label={`Edit ${task.title}`} className="p-1 hover:bg-muted rounded">
-                  <PencilEdit02Icon className="h-4 w-4" />
-                </button>
-              </DialogTrigger>
-              <EditTaskDialogContent task={task} onSaved={onRefresh} />
-            </Dialog>
-            <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
-            <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-              <DialogTrigger asChild>
-                <button
-                  aria-label={`Delete ${task.title}`}
-                  className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 rounded"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[400px]">
-                <DialogHeader>
-                  <DialogTitle>Delete task?</DialogTitle>
-                  <DialogDescription>
-                    Are you sure you want to delete &ldquo;{task.title}&rdquo;?
-                    This action cannot be undone.
-                  </DialogDescription>
-                </DialogHeader>
-                <DialogFooter className="flex gap-2 sm:justify-end">
-                  <Button
-                    variant="outline"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    onClick={() => {
-                      setConfirmDelete(false);
-                      onDelete(task);
-                    }}
-                  >
-                    Delete
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </>
-        )}
+        <Dialog>
+          <DialogTrigger asChild>
+            <button aria-label={`Edit ${task.title}`} className="p-1 hover:bg-muted rounded">
+              <PencilEdit02Icon className="h-4 w-4" />
+            </button>
+          </DialogTrigger>
+          <EditTaskDialogContent task={task} onSaved={onRefresh} />
+        </Dialog>
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+        <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+          <DialogTrigger asChild>
+            <button
+              aria-label={`Delete ${task.title}`}
+              className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 rounded"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Delete task?</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete &ldquo;{task.title}&rdquo;?
+                This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex gap-2 sm:justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmDelete(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  onDelete(task);
+                }}
+              >
+                Delete
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

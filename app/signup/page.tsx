@@ -80,7 +80,7 @@ export default function SignUp() {
                     onChange={(e) => setFirstName(e.target.value)}
                     value={firstName}
                     id="first-name"
-                    placeholder="Rishabh"
+                    placeholder="John"
                     required
                     autoComplete="given-name"
                   />
@@ -91,7 +91,7 @@ export default function SignUp() {
                     onChange={(e) => setLastName(e.target.value)}
                     value={lastName}
                     id="last-name"
-                    placeholder="Gokhe"
+                    placeholder="Doe"
                     required
                     autoComplete="family-name"
                   />
@@ -121,8 +121,12 @@ export default function SignUp() {
                   id="password"
                   type={showPassword ? "text" : "password"}
                   required
+                  minLength={10}
                   autoComplete="new-password"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Use at least 10 characters.
+                </p>
               </div>
               <div className="flex justify-between">
                 <div className="flex items-center">

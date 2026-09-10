@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "../ui/skeleton";
@@ -27,6 +27,8 @@ import {
   CheckCheck,
   ArrowUpDown,
   Download,
+  Upload,
+  Undo2,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore } from "date-fns";
 
@@ -85,6 +87,9 @@ export default function TaskList({
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
   const [sort, setSort] = useState<SortMode>("smart");
+  const [importing, setImporting] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -253,10 +258,119 @@ export default function TaskList({
     setTasks((prev) => prev.filter((t) => t.id !== task.id));
     try {
       await axios.delete(`/api/task/${task.id}`);
+      setLastDeleted(task);
       toast.success("Task deleted");
     } catch {
       setTasks(previous);
       toast.error("Failed to delete task");
+    }
+  };
+
+  const restoreTask = async (task: Task) => {
+    const previous = tasks;
+    try {
+      await axios.post("/api/newtask", {
+        taskTitle: task.title,
+        description: task.description || "",
+        dueDate: task.scheduledAt || null,
+        list: task.list || "default",
+        priority: task.priority || "medium",
+      });
+      setLastDeleted(null);
+      toast.success("Task restored");
+      refresh();
+    } catch {
+      setTasks(previous);
+      toast.error("Could not restore task");
+    }
+  };
+
+  type ImportPayload = {
+    taskTitle: string;
+    description: string;
+    dueDate: string | null;
+    list: string;
+    priority: string;
+  };
+
+  const normalizeImportedTask = (item: any): ImportPayload | null => {
+    if (!item || typeof item !== "object") return null;
+    const title =
+      typeof item.title === "string" ? item.title.trim() : "";
+    if (!title || title.length > 120) return null;
+    const priority = ["low", "medium", "high"].includes(item.priority)
+      ? item.priority
+      : "medium";
+    const rawDate = item.scheduledAt ?? item.date ?? null;
+    let dueDate: string | null = null;
+    if (rawDate) {
+      const d = new Date(rawDate);
+      if (!isNaN(d.getTime())) dueDate = d.toISOString();
+    }
+    const list =
+      typeof item.list === "string" && item.list.trim()
+        ? item.list.trim()
+        : "default";
+    const description =
+      typeof item.description === "string" && item.description.trim()
+        ? item.description.trim().slice(0, 100)
+        : "";
+    return { taskTitle: title, description, dueDate, list, priority };
+  };
+
+  const handleImportFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as any;
+      const raw = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.tasks)
+        ? parsed.tasks
+        : null;
+      const items = raw as any[] | null;
+      if (!items) {
+        toast.error("Invalid file: expected a tasks array");
+        return;
+      }
+      if (items.length === 0) {
+        toast.error("The file contains no tasks");
+        return;
+      }
+      if (items.length > 500) {
+        toast.error("Too many tasks (max 500 per import)");
+        return;
+      }
+      const payloads = items
+        .map(normalizeImportedTask)
+        .filter((p): p is ImportPayload => p !== null);
+      if (payloads.length === 0) {
+        toast.error("No valid tasks found in the file");
+        return;
+      }
+      let ok = 0;
+      let fail = 0;
+      for (const payload of payloads) {
+        try {
+          await axios.post("/api/newtask", payload);
+          ok++;
+        } catch {
+          fail++;
+        }
+      }
+      const skipped = items.length - payloads.length;
+      if (ok > 0) {
+        toast.success(`Imported ${ok} of ${payloads.length} tasks`);
+      }
+      if (fail > 0) toast.error(`${fail} task${fail > 1 ? "s" : ""} failed`);
+      if (skipped > 0) {
+        toast(`Skipped ${skipped} invalid entr${skipped === 1 ? "y" : "ies"}`);
+      }
+      refresh();
+    } catch {
+      toast.error("Could not read the file. Make sure it is valid JSON.");
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -446,6 +560,38 @@ export default function TaskList({
                 </SelectContent>
               </Select>
             </div>
+            {lastDeleted ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => restoreTask(lastDeleted)}
+                className="text-emerald-600 hover:text-emerald-600"
+              >
+                <Undo2 className="mr-1.5 h-4 w-4" />
+                Undo delete
+              </Button>
+            ) : null}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              aria-label="Import tasks from JSON"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleImportFile(file);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+            >
+              <Upload className="mr-1.5 h-4 w-4" />
+              {importing ? "Importing..." : "Import"}
+            </Button>
             <Button
               size="sm"
               variant="outline"

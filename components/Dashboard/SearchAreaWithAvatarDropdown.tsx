@@ -16,8 +16,7 @@ import {
 import { Button } from "../ui/button";
 import { useAppDispatch, useAppSelector } from "@/hooks";
 import { logoutUser } from "@/redux/user/userSlice";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
-import UserCircleIcon from "@/public/svg/icons/UserCircleIcon";
+import { Avatar, AvatarFallback } from "../ui/avatar";
 import CustomButton from "../elements/CustomButton";
 import GetQuotes from "@/middleware/getQuotes";
 import toast from "react-hot-toast";
@@ -38,6 +37,14 @@ export default function SearchAreaWithAvatarDropdown({
   const user = useAppSelector((state) => state.user.user?.name);
   const [quote, setQuote] = useState<string>("");
   const dispatch = useAppDispatch();
+
+  const displayName = user?.trim() || "TaskFlow";
+  const initials = displayName
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 
   useEffect(() => {
     const fetchQuote = async () => {
@@ -96,9 +103,8 @@ export default function SearchAreaWithAvatarDropdown({
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="icon" className="rounded-full" aria-label="User Menu">
             <Avatar>
-              <AvatarImage src="https://avatars.githubusercontent.com/u/120303705?v=4" alt="User avatar" />
-              <AvatarFallback>
-                <UserCircleIcon />
+              <AvatarFallback className="text-xs font-semibold">
+                {initials}
               </AvatarFallback>
             </Avatar>
           </Button>

@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { listNames } from "@/lib/Data";
+import { useCustomLists } from "@/lib/customLists";
 
 import ArrowDown05Icon from "@/public/svg/icons/ArrowDown05Icon";
 import CalendarUpload01Icon from "@/public/svg/icons/CalendarUpload01Icon";
@@ -65,6 +66,11 @@ export function AddTaskInlineModal({
       priority: "medium",
     },
   });
+
+  const customLists = useCustomLists();
+  const listOptions = Array.from(
+    new Set([...listNames.map((item) => item.name), ...customLists])
+  );
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
     const formData = {
@@ -195,9 +201,9 @@ export function AddTaskInlineModal({
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  {listNames.map((item, id) => (
-                    <SelectItem key={id} value={item.name} className="capitalize">
-                      {item.name}
+                  {listOptions.map((name) => (
+                    <SelectItem key={name} value={name} className="capitalize">
+                      {name}
                     </SelectItem>
                   ))}
                 </SelectContent>

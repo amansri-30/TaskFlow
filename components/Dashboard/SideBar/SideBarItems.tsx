@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { X } from "lucide-react";
 import { Badge } from "../../ui/badge";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Separator } from "../../ui/separator";
@@ -8,6 +9,7 @@ import { SideBarDataType } from "@/types";
 import { TagsAccordian } from "./TagsAccordian";
 import CreateListDialog from "./CreateListDialog";
 import type { TaskStats } from "../Dashboard";
+import { useCustomLists, removeCustomList } from "@/lib/customLists";
 
 import AddCircleIcon from "@/public/svg/icons/AddCircleIcon";
 import { cn } from "@/lib/utils";
@@ -32,6 +34,8 @@ export const SideBarItems = ({
   onSelectFilter: (filter: string) => void;
   stats: TaskStats;
 }) => {
+  const customLists = useCustomLists();
+
   return (
     <>
       {/* list of inbox, today, scheduled, filter & label */}
@@ -90,6 +94,34 @@ export const SideBarItems = ({
             {icon} {name}
           </button>
         ))}
+
+      {customLists.map((name) => (
+        <div
+          key={name}
+          className="flex items-center rounded-lg transition-colors group"
+        >
+          <button
+            onClick={() => onSelectFilter(`list:${name}`)}
+            aria-pressed={activeFilter === `list:${name}`}
+            className={cn(
+              "flex flex-1 items-center gap-3 rounded-lg px-3 py-2 capitalize transition-all hover:text-primary",
+              activeFilter === `list:${name}` && "bg-muted text-primary"
+            )}
+          >
+            {name}
+          </button>
+          <button
+            aria-label={`Delete list ${name}`}
+            onClick={() => {
+              removeCustomList(name);
+              if (activeFilter === `list:${name}`) onSelectFilter("all");
+            }}
+            className="mr-1 hidden p-1 text-muted-foreground transition-colors hover:text-red-600 group-hover:block"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      ))}
 
       <Dialog>
         <DialogTrigger asChild>

@@ -11,33 +11,30 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import React, { useState } from "react";
 import toast from "react-hot-toast";
+import { addCustomList } from "@/lib/customLists";
 
-type CustomList = {
-  name: string;
-  link: string;
-  icon: JSX.Element;
-};
-
-export default function CreateListDialog({ onListCreated }: { onListCreated?: (list: CustomList) => void }) {
-  const [list, setList] = useState("");
-
-  function handleClick() {
-    if (!list.trim()) {
-      toast.error("List name is required");
-      return;
-    }
-    const newList: CustomList = {
-      name: list.trim(),
-      link: `/list/${list.trim().toLowerCase()}`,
-      icon: <div className="w-5 h-5" />,
-    };
-    onListCreated?.(newList);
-    toast.success(`List "${newList.name}" created`);
-    setList("");
-  }
+export default function CreateListDialog() {
+  const [listName, setListName] = useState("");
 
   function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
-    setList(event.target.value);
+    setListName(event.target.value);
+  }
+
+  function handleCreate() {
+    const result = addCustomList(listName);
+    if (!result.added) {
+      toast.error("List already exists or you reached the 20-list limit");
+      return;
+    }
+    toast.success(`List "${listName.trim()}" created`);
+    setListName("");
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleCreate();
+    }
   }
 
   return (
@@ -56,14 +53,20 @@ export default function CreateListDialog({ onListCreated }: { onListCreated?: (l
           <Input
             id="list-name"
             className="ring-inset"
-            value={list}
+            value={listName}
             onChange={handleChange}
+            onKeyDown={handleKeyDown}
             placeholder="e.g. Work, Health, Travel"
+            maxLength={30}
           />
         </div>
+        <p className="text-xs text-muted-foreground">
+          Custom lists are saved on this device and appear in the sidebar and
+          task forms. Delete a list by hovering it in the sidebar.
+        </p>
       </div>
       <DialogFooter>
-        <CustomButton type="button" className="w-full" onClick={handleClick}>
+        <CustomButton type="button" className="w-full" onClick={handleCreate}>
           Create Now
         </CustomButton>
       </DialogFooter>

@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { listNames } from "@/lib/Data";
+import { useCustomLists } from "@/lib/customLists";
 import { Task } from "@/types";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -52,6 +53,10 @@ export function EditTaskDialogContent({
     return isNaN(d.getTime()) ? undefined : d;
   });
   const [isSaving, setIsSaving] = useState(false);
+  const customLists = useCustomLists();
+  const listOptions = Array.from(
+    new Set([list, ...listNames.map((item) => item.name), ...customLists])
+  );
 
   const handleDateSelected: SelectSingleEventHandler = (date) => {
     if (date instanceof Date && !isNaN(date.getTime())) {
@@ -127,9 +132,9 @@ export function EditTaskDialogContent({
               <SelectValue placeholder={task.list} />
             </SelectTrigger>
             <SelectContent>
-              {listNames.map((item, id) => (
-                <SelectItem key={id} value={item.name}>
-                  {item.name}
+              {listOptions.map((name) => (
+                <SelectItem key={name} value={name} className="capitalize">
+                  {name}
                 </SelectItem>
               ))}
             </SelectContent>

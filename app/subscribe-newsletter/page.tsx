@@ -14,6 +14,7 @@ import AlertBox from "@/components/elements/AlertBox";
 import CustomButton from "@/components/elements/CustomButton";
 import PageTemplate from "@/components/elements/PageTemplate";
 import toast from "react-hot-toast";
+import axios from "axios";
 import { FadeDown } from "animease";
 
 import InformationCircleIcon from "@/public/svg/icons/InformationCircleIcon";
@@ -22,13 +23,32 @@ import MailSend01Icon from "@/public/svg/icons/MailSend01Icon";
 export default function SubscribeNewsletter() {
   const [email, setEmail] = useState("");
   const [alertShown, setAlertShown] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setAlertShown(true);
-    toast.success(
-      "Subscription successful! Please check your email for confirmation."
-    );
+    setSubmitting(true);
+    try {
+      await axios.post("/api/subscribe", { email: email.trim() });
+      setHasError(false);
+      toast.success("Subscription successful!");
+      setEmail("");
+      setAlertShown(true);
+      setTimeout(() => setAlertShown(false), 10000);
+    } catch (error: any) {
+      const already = error?.response?.status === 409;
+      toast.error(
+        already
+          ? "You are already subscribed"
+          : error?.response?.data?.message || "Subscription failed. Please try again."
+      );
+      setHasError(true);
+      setAlertShown(true);
+      setTimeout(() => setAlertShown(false), 10000);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -63,8 +83,9 @@ export default function SubscribeNewsletter() {
                   rightIcon={<MailSend01Icon />}
                   type="submit"
                   className="w-full mt-4"
+                  disabled={submitting}
                 >
-                  Subscribe
+                  {submitting ? "Subscribing..." : "Subscribe"}
                 </CustomButton>
               </CardFooter>
             </form>
@@ -72,8 +93,12 @@ export default function SubscribeNewsletter() {
             {alertShown && (
               <AlertBox
                 alertShown={alertShown}
-                title="Subscription Successful"
-                description="Please check your email to confirm your subscription."
+                title={hasError ? "Subscription Failed" : "Subscription Successful"}
+                description={
+                  hasError
+                    ? "Sorry, we could not subscribe you right now. Please try again later."
+                    : "You have been added to our newsletter list."
+                }
                 icon={<InformationCircleIcon />}
               />
             )}

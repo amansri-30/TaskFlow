@@ -15,6 +15,7 @@ import PageTemplate from "@/components/elements/PageTemplate";
 import CustomButton from "@/components/elements/CustomButton";
 import { baseRedColor } from "@/lib/Colors";
 import toast from "react-hot-toast";
+import axios from "axios";
 import AlertBox from "@/components/elements/AlertBox";
 
 import HandPrayerIcon from "@/public/svg/icons/HandPrayerIcon";
@@ -24,21 +25,35 @@ const Feedback = () => {
   const [email, setEmail] = useState("");
   const [feedback, setFeedback] = useState("");
   const [alertShown, setAlertShown] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setAlertShown(true);
-    setTimeout(() => {
-      setAlertShown(false);
+    if (!email.trim() || !feedback.trim()) {
+      toast.error("Email and feedback are required");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await axios.post("/api/feedback", {
+        email: email.trim(),
+        message: feedback.trim(),
+      });
+      setHasError(false);
+      toast.success("Feedback submitted successfully");
       setEmail("");
       setFeedback("");
-    }, 15000);
-    toast(
-      <div className="flex gap-1 rounded-lg">
-        <HandPrayerIcon />
-        <p>Form Submitted Successfully</p>
-      </div>
-    );
+      setAlertShown(true);
+      setTimeout(() => setAlertShown(false), 10000);
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message || "Failed to submit feedback";
+      setHasError(true);
+      toast.error(message);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -89,18 +104,25 @@ const Feedback = () => {
                   rightIcon={<UploadSquare01Icon />}
                   className="text-sm w-full"
                   type="submit"
+                  disabled={submitting}
                 >
-                  Submit
+                  {submitting ? "Submitting..." : "Submit"}
                 </CustomButton>
               </CardFooter>
             </form>
 
-            <AlertBox
-              alertShown={alertShown}
-              title="Feedback Submitted"
-              description="Thank you for your feedback! We'll review it soon."
-              icon={<HandPrayerIcon />}
-            />
+            {alertShown && (
+              <AlertBox
+                alertShown={alertShown}
+                title={hasError ? "Feedback Not Delivered" : "Feedback Submitted"}
+                description={
+                  hasError
+                    ? "Something went wrong while sending your feedback. Please try again."
+                    : "Thank you for your feedback! We'll review it soon."
+                }
+                icon={<HandPrayerIcon />}
+              />
+            )}
             
           </CardContent>
         </Card>

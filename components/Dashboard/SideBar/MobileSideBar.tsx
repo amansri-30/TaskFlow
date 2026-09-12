@@ -24,10 +24,12 @@ export const MobileNav = ({
   activeFilter,
   onSelectFilter,
   stats,
+  onSearchChange,
 }: {
   activeFilter: string;
   onSelectFilter: (filter: string) => void;
   stats: TaskStats;
+  onSearchChange: (value: string) => void;
 }) => {
   return (
     <>
@@ -54,6 +56,7 @@ export const MobileNav = ({
               activeFilter={activeFilter}
               onSelectFilter={onSelectFilter}
               stats={stats}
+              onSearchChange={onSearchChange}
             />
           </nav>
           <ImportantLinks />

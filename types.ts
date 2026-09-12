@@ -33,6 +33,7 @@ export type Task = {
   date?: string;
   scheduledAt?: string;
   completed?: boolean;
+  completedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

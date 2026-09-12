@@ -27,12 +27,14 @@ export const SideBarItems = ({
   activeFilter,
   onSelectFilter,
   stats,
+  onSearchChange,
 }: {
   SideBarList: SideBarDataType[];
   listNames: SideBarDataType[];
   activeFilter: string;
   onSelectFilter: (filter: string) => void;
   stats: TaskStats;
+  onSearchChange: (value: string) => void;
 }) => {
   const customLists = useCustomLists();
 
@@ -135,7 +137,12 @@ export const SideBarItems = ({
       <Separator />
 
       {/* Tags Section */}
-      <TagsAccordian />
+      <TagsAccordian
+        onTagClick={(tag) => {
+          onSelectFilter("all");
+          onSearchChange(tag);
+        }}
+      />
     </>
   );
 };

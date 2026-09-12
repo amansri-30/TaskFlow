@@ -77,6 +77,7 @@ export default function SearchAreaWithAvatarDropdown({
         activeFilter={activeFilter}
         onSelectFilter={onSelectFilter}
         stats={stats}
+        onSearchChange={onSearchChange}
       />
       <div className="w-full flex-1">
         <form onSubmit={(e) => e.preventDefault()}>

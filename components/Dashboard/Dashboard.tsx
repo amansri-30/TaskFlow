@@ -22,6 +22,7 @@ export function Dashboard() {
         activeFilter={filter}
         onSelectFilter={setFilter}
         stats={stats}
+        onSearchChange={setSearch}
       />
       <div className="flex flex-col">
         {/* // Search bar with account avatar dropdown menu */}

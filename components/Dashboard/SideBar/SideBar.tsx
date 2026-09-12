@@ -14,10 +14,12 @@ export default function SideBar({
   activeFilter,
   onSelectFilter,
   stats,
+  onSearchChange,
 }: {
   activeFilter: string;
   onSelectFilter: (filter: string) => void;
   stats: TaskStats;
+  onSearchChange: (value: string) => void;
 }) {
   return (
     <div className="hidden border-r bg-muted/40 md:block">
@@ -40,6 +42,7 @@ export default function SideBar({
               activeFilter={activeFilter}
               onSelectFilter={onSelectFilter}
               stats={stats}
+              onSearchChange={onSearchChange}
             />
           </nav>
         </div>

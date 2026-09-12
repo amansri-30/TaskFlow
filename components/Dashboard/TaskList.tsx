@@ -29,8 +29,9 @@ import {
   Download,
   Upload,
   Undo2,
+  TrendingUp,
 } from "lucide-react";
-import { isSameDay, startOfDay, isBefore } from "date-fns";
+import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
@@ -127,6 +128,24 @@ export default function TaskList({
   const completedCount = tasks.filter((t) => t.completed).length;
   const pendingCount = total - completedCount;
   const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
+
+  const dayTotals = Array.from({ length: 7 }, (_, i) => {
+    const day = startOfDay(addDays(new Date(), i - 6));
+    return {
+      day,
+      count: tasks.filter(
+        (t) =>
+          t.completed &&
+          t.completedAt &&
+          !isNaN(new Date(t.completedAt).getTime()) &&
+          isSameDay(new Date(t.completedAt), day)
+      ).length,
+    };
+  });
+  const completedThisWeek = dayTotals.reduce((sum, d) => sum + d.count, 0);
+  const chartMax = Math.max(1, ...dayTotals.map((d) => d.count));
+  const dayLabel = (day: Date) =>
+    day.toLocaleDateString(undefined, { weekday: "short" });
 
   useEffect(() => {
     const todayCount = tasks.filter((t) => {
@@ -243,7 +262,15 @@ export default function TaskList({
   const handleToggleComplete = async (task: Task, value: boolean) => {
     const previous = tasks;
     setTasks((prev) =>
-      prev.map((t) => (t.id === task.id ? { ...t, completed: value } : t))
+      prev.map((t) =>
+        t.id === task.id
+          ? {
+              ...t,
+              completed: value,
+              completedAt: value ? new Date().toISOString() : null,
+            }
+          : t
+      )
     );
     try {
       await axios.patch(`/api/task/${task.id}`, { completed: value });
@@ -411,14 +438,6 @@ export default function TaskList({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-lg font-semibold md:text-2xl">{heading}</h1>
         <div className="flex items-center gap-2">
-          <input
-            type="search"
-            placeholder="Search tasks..."
-            aria-label="Search tasks"
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="h-9 w-40 md:w-56 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
           <Button
             onClick={() => setEdit(!edit)}
             size="sm"
@@ -480,6 +499,11 @@ export default function TaskList({
                 label="Completed"
                 value={completedCount}
               />
+              <Stat
+                icon={<TrendingUp className="h-4 w-4" />}
+                label="This Week"
+                value={completedThisWeek}
+              />
             </div>
             <div
               className="h-2 w-full overflow-hidden rounded-full bg-muted"
@@ -497,6 +521,45 @@ export default function TaskList({
             <p className="mt-1 text-xs text-muted-foreground">
               {completionPct}% of tasks completed
             </p>
+
+            {/* Weekly activity */}
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">
+                Tasks completed in the last 7 days
+              </p>
+              <div
+                className="flex h-16 items-end gap-1.5"
+                role="img"
+                aria-label={`Weekly activity: ${completedThisWeek} tasks completed this week`}
+              >
+                {dayTotals.map(({ day, count }, i) => (
+                  <div
+                    key={i}
+                    className="flex h-full flex-1 flex-col items-center justify-end"
+                  >
+                    <span className="text-[10px] leading-none text-muted-foreground">
+                      {count > 0 ? count : ""}
+                    </span>
+                    <div
+                      className={`mt-1 w-full rounded-t ${
+                        count > 0 ? "bg-emerald-500" : "bg-muted"
+                      }`}
+                      style={{
+                        height: `${
+                          count > 0
+                            ? Math.max(10, Math.round((count / chartMax) * 100))
+                            : 4
+                        }%`,
+                      }}
+                      title={`${dayLabel(day)}: ${count}`}
+                    />
+                    <span className="mt-1 text-[10px] leading-none text-muted-foreground">
+                      {dayLabel(day)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </section>
 
           {/* Filter chips */}

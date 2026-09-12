@@ -13,6 +13,7 @@ const mapTask = (t: any) => ({
   priority: t.priority,
   scheduledAt: t.scheduledAt,
   completed: t.completed,
+  completedAt: t.completedAt,
   createdAt: t.createdAt,
   updatedAt: t.updatedAt,
 });
@@ -54,6 +55,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
       const { completed } = req.body;
       if (typeof completed === "boolean") {
         task.completed = completed;
+        task.completedAt = completed ? new Date() : null;
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task status updated", { task: mapTask(task) });

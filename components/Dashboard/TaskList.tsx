@@ -46,6 +46,8 @@ import type { TaskStats } from "./Dashboard";
 import { useAppDispatch } from "@/hooks";
 import { userActions } from "@/redux/user/userSlice";
 
+import { useCustomLists } from "@/lib/customLists";
+
 import PencilEdit02Icon from "@/public/svg/icons/PencilEdit02Icon";
 
 const emptyTasks: Task[] = [];
@@ -91,6 +93,151 @@ export default function TaskList({
   const [importing, setImporting] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  const [batchActionNonce, setBatchActionNonce] = useState(0);
+  const customLists = useCustomLists();
+
+  const resetSelection = () => setSelectedIds(new Set());
+
+  const toggleEdit = () => {
+    setEdit((prev) => {
+      if (prev) resetSelection();
+      return !prev;
+    });
+  };
+
+  const handleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+
+  const selectedTasks = tasks.filter((t) => selectedIds.has(t.id));
+  const selectedIncomplete = selectedTasks.filter((t) => !t.completed);
+  const selectedCompleted = selectedTasks.filter((t) => t.completed);
+
+  const handleBatchComplete = async () => {
+    if (selectedIncomplete.length === 0) return;
+    const previous = tasks;
+    const target = selectedIncomplete;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) =>
+      prev.map((t) =>
+        ids.has(t.id)
+          ? {
+              ...t,
+              completed: true,
+              completedAt: t.completed ? t.completedAt : new Date().toISOString(),
+            }
+          : t
+      )
+    );
+    try {
+      await Promise.all(
+        target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: true }))
+      );
+      toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to complete selected tasks");
+    }
+  };
+
+  const handleBatchReopen = async () => {
+    if (selectedCompleted.length === 0) return;
+    const previous = tasks;
+    const target = selectedCompleted;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) =>
+      prev.map((t) =>
+        ids.has(t.id) ? { ...t, completed: false, completedAt: null } : t
+      )
+    );
+    try {
+      await Promise.all(
+        target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: false }))
+      );
+      toast.success(`Reopened ${target.length} task${target.length > 1 ? "s" : ""}`);
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to reopen selected tasks");
+    }
+  };
+
+  const handleBatchSetPriority = async (
+    priority: NonNullable<Task["priority"]>
+  ) => {
+    if (selectedTasks.length === 0) return;
+    const previous = tasks;
+    const target = selectedTasks;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) =>
+      prev.map((t) => (ids.has(t.id) ? { ...t, priority } : t))
+    );
+    try {
+      await Promise.all(
+        target.map((t) => axios.patch(`/api/task/${t.id}`, { priority }))
+      );
+      toast.success(`Priority set to ${priority} for ${target.length} task${target.length > 1 ? "s" : ""}`);
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to update priority");
+    }
+  };
+
+  const handleBatchSetList = async (list: string) => {
+    if (selectedTasks.length === 0) return;
+    const previous = tasks;
+    const target = selectedTasks;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) =>
+      prev.map((t) => (ids.has(t.id) ? { ...t, list } : t))
+    );
+    try {
+      await Promise.all(
+        target.map((t) => axios.patch(`/api/task/${t.id}`, { list }))
+      );
+      toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to "${list}"`);
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to move tasks");
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    const target = selectedTasks;
+    if (target.length === 0) return;
+    const previous = tasks;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) => prev.filter((t) => !ids.has(t.id)));
+    setConfirmBatchDelete(false);
+    resetSelection();
+    try {
+      await Promise.all(target.map((t) => axios.delete(`/api/task/${t.id}`)));
+      toast.success(`Deleted ${target.length} task${target.length > 1 ? "s" : ""}`);
+    } catch {
+      setTasks(previous);
+      toast.error("Failed to delete selected tasks");
+    }
+  };
+
+  const handleSelectAllShown = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allShownSelected) {
+        filtered.forEach((t) => next.delete(t.id));
+      } else {
+        filtered.forEach((t) => next.add(t.id));
+      }
+      return next;
+    });
+  };
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -204,6 +351,12 @@ export default function TaskList({
 
   const incomplete = filtered.filter((t) => !t.completed);
   const completed = filtered.filter((t) => t.completed);
+
+  const allShownSelected =
+    filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id));
+  const batchListOptions = Array.from(
+    new Set<string>([...lists, ...customLists])
+  );
   const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
   const dueTime = (t: Task) =>
     t.scheduledAt && !isNaN(new Date(t.scheduledAt).getTime())
@@ -439,11 +592,11 @@ export default function TaskList({
         <h1 className="text-lg font-semibold md:text-2xl">{heading}</h1>
         <div className="flex items-center gap-2">
           <Button
-            onClick={() => setEdit(!edit)}
+            onClick={toggleEdit}
             size="sm"
             variant={edit ? "outline" : "default"}
           >
-            {edit ? "Done" : "Edit"}
+            {edit ? "Done" : "Select"}
           </Button>
         </div>
       </div>
@@ -582,6 +735,122 @@ export default function TaskList({
             ))}
           </div>
 
+          {/* Batch select toolbar — visible when Edit/Select mode is on */}
+          {edit && (
+            <div
+              className={`rounded-lg border p-3 transition-colors ${
+                selectedIds.size > 0
+                  ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
+                  : "border-dashed border-muted-foreground/30"
+              }`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedIds.size > 0 ? (
+                  <>
+                    <span className="text-sm font-semibold tabular-nums">
+                      {selectedIds.size} selected
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleSelectAllShown}
+                    >
+                      {allShownSelected ? "Deselect all" : "Select all shown"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={resetSelection}>
+                      Clear
+                    </Button>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Click checkboxes to select multiple tasks for batch actions.
+                  </p>
+                )}
+              </div>
+
+              {selectedIds.size > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-emerald-200 dark:border-emerald-800 pt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleBatchComplete}
+                    disabled={selectedIncomplete.length === 0}
+                  >
+                    <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                    Complete
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleBatchReopen}
+                    disabled={selectedCompleted.length === 0}
+                  >
+                    <Undo2 className="mr-1.5 h-4 w-4" />
+                    Reopen
+                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <Flag className="h-4 w-4 text-muted-foreground" />
+                    <Select
+                      key={`pri-${batchActionNonce}`}
+                      onValueChange={(v) => {
+                        setBatchActionNonce((n) => n + 1);
+                        handleBatchSetPriority(
+                          v as NonNullable<Task["priority"]>
+                        );
+                      }}
+                    >
+                      <SelectTrigger
+                        className="h-8 min-w-[130px]"
+                        aria-label="Set priority for selected"
+                      >
+                        <SelectValue placeholder="Set priority" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="high">High</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="low">Low</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {batchListOptions.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <ListChecks className="h-4 w-4 text-muted-foreground" />
+                      <Select
+                        key={`list-${batchActionNonce}`}
+                        onValueChange={(v) => {
+                          setBatchActionNonce((n) => n + 1);
+                          handleBatchSetList(v);
+                        }}
+                      >
+                        <SelectTrigger
+                          className="h-8 min-w-[130px]"
+                          aria-label="Move selected to list"
+                        >
+                          <SelectValue placeholder="Move to list" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {batchListOptions.map((l) => (
+                            <SelectItem key={l} value={l}>
+                              {l}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setConfirmBatchDelete(true)}
+                  >
+                    <Trash2 className="mr-1.5 h-4 w-4" />
+                    Delete
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Bulk actions */}
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -697,6 +966,36 @@ export default function TaskList({
             </DialogContent>
           </Dialog>
 
+          {/* Batch delete confirmation */}
+          <Dialog open={confirmBatchDelete} onOpenChange={setConfirmBatchDelete}>
+            <DialogContent className="sm:max-w-[400px]">
+              <DialogHeader>
+                <DialogTitle>Delete {selectedIds.size} task{selectedIds.size === 1 ? "" : "s"}?</DialogTitle>
+                <DialogDescription>
+                  This will permanently delete{" "}
+                  {selectedTasks.length === 0
+                    ? "the selected tasks"
+                    : `"${selectedTasks
+                        .slice(0, 3)
+                        .map((t) => t.title)
+                        .join('", "')}${selectedTasks.length > 3 ? '" and more' : '"'}`}
+                  . This action cannot be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="flex gap-2 sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setConfirmBatchDelete(false)}
+                >
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={handleBatchDelete}>
+                  Delete
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           {/* Incomplete Tasks */}
           <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
             {sortedIncomplete.length > 0 ? (
@@ -705,6 +1004,8 @@ export default function TaskList({
                   key={task.id}
                   task={task}
                   edit={edit}
+                  selected={selectedIds.has(task.id)}
+                  onSelect={handleSelect}
                   onToggle={handleToggleComplete}
                   onDelete={handleDelete}
                   onRefresh={refresh}
@@ -734,6 +1035,8 @@ export default function TaskList({
                     key={task.id}
                     task={task}
                     edit={edit}
+                    selected={selectedIds.has(task.id)}
+                    onSelect={handleSelect}
                     onToggle={handleToggleComplete}
                     onDelete={handleDelete}
                     onRefresh={refresh}
@@ -799,12 +1102,16 @@ function FilterChip({
 function TaskItem({
   task,
   edit,
+  selected,
+  onSelect,
   onToggle,
   onDelete,
   onRefresh,
 }: {
   task: Task;
   edit: boolean;
+  selected: boolean;
+  onSelect: (id: string) => void;
   onToggle: (task: Task, value: boolean) => void;
   onDelete: (task: Task) => void;
   onRefresh: () => void;
@@ -812,12 +1119,23 @@ function TaskItem({
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
-    <div className="flex px-2 items-center justify-between space-x-2 w-full hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-lg transition duration-300 ease-in-out group">
+    <div
+      className={`flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group ${
+        selected
+          ? "bg-emerald-50 dark:bg-emerald-950/40 ring-1 ring-emerald-300 dark:ring-emerald-800"
+          : "hover:bg-gray-100 dark:hover:bg-neutral-800"
+      }`}
+    >
       <div className="flex items-center min-w-0">
         <Checkbox
           id={`task-${task.id}`}
-          checked={!!task.completed}
-          onCheckedChange={(v) => onToggle(task, v === true)}
+          checked={edit ? selected : !!task.completed}
+          onCheckedChange={(v) =>
+            edit ? onSelect(task.id) : onToggle(task, v === true)
+          }
+          aria-label={
+            edit ? `Select ${task.title}` : `Mark ${task.title} as done`
+          }
         />
         <label
           htmlFor={`task-${task.id}`}

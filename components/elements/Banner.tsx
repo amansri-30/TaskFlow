@@ -1,4 +1,3 @@
-import { baseBlueColor } from "@/lib/Colors";
 import { footerLinksData } from "@/lib/Data";
 
 import ArrowUpRight01Icon from "@/public/svg/icons/ArrowUpRight01Icon";

@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { listNames } from "@/lib/Data";
 import { useCustomLists } from "@/lib/customLists";
+import { RECURRENCE_OPTIONS } from "@/lib/recurrence";
 
 import ArrowDown05Icon from "@/public/svg/icons/ArrowDown05Icon";
 import CalendarUpload01Icon from "@/public/svg/icons/CalendarUpload01Icon";
@@ -45,6 +46,7 @@ const FormSchema = z.object({
   dueDate: z.date().optional(),
   list: z.string().default(""),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
+  recurrence: z.enum(["none", "daily", "weekly", "monthly"]).default("none"),
 });
 
 type AddTaskInlineModalProps = {
@@ -64,6 +66,7 @@ export function AddTaskInlineModal({
       dueDate: undefined,
       list: "default",
       priority: "medium",
+      recurrence: "none",
     },
   });
 
@@ -79,6 +82,7 @@ export function AddTaskInlineModal({
       dueDate: data.dueDate ?? null,
       list: data.list,
       priority: data.priority,
+      recurrence: data.recurrence,
     };
 
     try {
@@ -235,6 +239,31 @@ export function AddTaskInlineModal({
                   <SelectItem value="high" className="capitalize">
                     High
                   </SelectItem>
+                </SelectContent>
+              </Select>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="recurrence"
+          render={({ field }) => (
+            <FormItem>
+              <Select
+                onValueChange={field.onChange}
+                defaultValue={field.value}
+              >
+                <FormControl>
+                  <SelectTrigger className="ring-inset lg:min-w-[220px] lg:max-w-full xl:min-w-[300px]">
+                    <SelectValue placeholder="Repeat" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {RECURRENCE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value} className="capitalize">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </FormItem>

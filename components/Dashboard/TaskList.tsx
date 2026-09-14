@@ -30,8 +30,10 @@ import {
   Upload,
   Undo2,
   TrendingUp,
+  Repeat,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
+import { isRecurrence, type Recurrence } from "@/lib/recurrence";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
@@ -126,6 +128,9 @@ export default function TaskList({
     if (selectedIncomplete.length === 0) return;
     const previous = tasks;
     const target = selectedIncomplete;
+    const hadRecurring = target.some(
+      (t) => t.recurrence && t.recurrence !== "none"
+    );
     const ids = new Set(target.map((t) => t.id));
     setTasks((prev) =>
       prev.map((t) =>
@@ -143,6 +148,10 @@ export default function TaskList({
         target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: true }))
       );
       toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
+      if (hadRecurring) {
+        await refreshSilently();
+        toast.success("Next occurrences scheduled for repeating tasks");
+      }
     } catch {
       setTasks(previous);
       toast.error("Failed to complete selected tasks");
@@ -426,12 +435,30 @@ export default function TaskList({
       )
     );
     try {
-      await axios.patch(`/api/task/${task.id}`, { completed: value });
+      const response = await axios.patch(`/api/task/${task.id}`, {
+        completed: value,
+      });
+      const nextTask = response.data?.nextTask as Task | null | undefined;
+      if (value && nextTask) {
+        setTasks((prev) =>
+          prev.some((t) => t.id === nextTask.id) ? prev : [...prev, nextTask]
+        );
+        toast.success("Next occurrence scheduled");
+      }
     } catch {
       setTasks(previous);
       toast.error("Failed to update task");
     }
   };
+
+  const refreshSilently = useCallback(async () => {
+    try {
+      const response = await axios.get("/api/getalltasks");
+      setTasks(response.data.tasks || []);
+    } catch {
+      // ignore — next explicit refresh will surface errors
+    }
+  }, []);
 
   const handleDelete = async (task: Task) => {
     const previous = tasks;
@@ -471,6 +498,7 @@ export default function TaskList({
     dueDate: string | null;
     list: string;
     priority: string;
+    recurrence: Recurrence;
   };
 
   const normalizeImportedTask = (item: any): ImportPayload | null => {
@@ -495,7 +523,12 @@ export default function TaskList({
       typeof item.description === "string" && item.description.trim()
         ? item.description.trim().slice(0, 100)
         : "";
-    return { taskTitle: title, description, dueDate, list, priority };
+    const recurrence: Recurrence = isRecurrence(item.recurrence)
+      ? item.recurrence
+      : isRecurrence(item.repeat)
+      ? item.repeat
+      : "none";
+    return { taskTitle: title, description, dueDate, list, priority, recurrence };
   };
 
   const handleImportFile = async (file: File) => {
@@ -1155,6 +1188,9 @@ function TaskItem({
           <PriorityChip priority={task.priority} completed={!!task.completed} />
         )}
         {task.scheduledAt && <DueLabel task={task} />}
+        {task.recurrence && task.recurrence !== "none" && (
+          <RecurrenceLabel recurrence={task.recurrence} />
+        )}
         <Dialog>
           <DialogTrigger asChild>
             <button aria-label={`Edit ${task.title}`} className="p-1 hover:bg-muted rounded">
@@ -1229,6 +1265,20 @@ function PriorityChip({
     >
       <Flag className="h-3 w-3" />
       {priority}
+    </span>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+
+function RecurrenceLabel({ recurrence }: { recurrence: Recurrence }) {
+  return (
+    <span
+      className="flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs text-violet-700 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300"
+      title={`Repeats ${recurrence}`}
+    >
+      <Repeat className="h-3 w-3" />
+      {recurrence}
     </span>
   );
 }

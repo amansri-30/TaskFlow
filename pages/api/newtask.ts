@@ -4,6 +4,7 @@ import Task from "@/models/taskModel";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
 import isAuthenticated from "@/middleware/isAuthenticated";
+import { isRecurrence } from "@/lib/recurrence";
 
 const newTask = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
@@ -11,13 +12,17 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, dueDate, list, priority } = req.body;
+    const { taskTitle, description, dueDate, list, priority, recurrence } = req.body;
 
     if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
 
     const validPriorities = ["low", "medium", "high"];
     if (priority && !validPriorities.includes(priority)) {
       return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
+    }
+
+    if (recurrence !== undefined && !isRecurrence(recurrence)) {
+      return handleRes(res, 400, false, "Invalid recurrence. Use none, daily, weekly, or monthly.");
     }
 
     const user = await isAuthenticated(req, res);
@@ -30,6 +35,7 @@ const newTask = catchAsyncError(
       scheduledAt: dueDate,
       list,
       priority: priority || "medium",
+      recurrence: recurrence || "none",
     });
 
     handleRes(res, 200, true, "Task created successfully");

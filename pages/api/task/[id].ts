@@ -4,6 +4,10 @@ import Task from "@/models/taskModel";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
 import isAuthenticated from "@/middleware/isAuthenticated";
+import {
+  isRecurrence,
+  nextOccurrenceDate,
+} from "@/lib/recurrence";
 
 const mapTask = (t: any) => ({
   id: t._id.toString(),
@@ -14,6 +18,7 @@ const mapTask = (t: any) => ({
   scheduledAt: t.scheduledAt,
   completed: t.completed,
   completedAt: t.completedAt,
+  recurrence: t.recurrence,
   createdAt: t.createdAt,
   updatedAt: t.updatedAt,
 });
@@ -36,16 +41,20 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, dueDate, list, priority } = req.body;
+      const { taskTitle, description, dueDate, list, priority, recurrence } = req.body;
       const validPriorities = ["low", "medium", "high"];
       if (priority && !validPriorities.includes(priority)) {
         return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
+      }
+      if (recurrence !== undefined && !isRecurrence(recurrence)) {
+        return handleRes(res, 400, false, "Invalid recurrence. Use none, daily, weekly, or monthly.");
       }
       task.title = taskTitle ?? task.title;
       if (description !== undefined) task.description = description;
       if (list !== undefined) task.list = list;
       if (priority !== undefined) task.priority = priority;
       if (dueDate !== undefined) task.scheduledAt = dueDate || null;
+      if (recurrence !== undefined) task.recurrence = recurrence;
       task.updatedAt = new Date();
       await task.save();
       return handleRes(res, 200, true, "Task updated", { task: mapTask(task) });
@@ -58,7 +67,33 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         task.completedAt = completed ? new Date() : null;
         task.updatedAt = new Date();
         await task.save();
-        return handleRes(res, 200, true, "Task status updated", { task: mapTask(task) });
+
+        let nextTask: any = null;
+        if (
+          completed &&
+          task.recurrence &&
+          task.recurrence !== "none"
+        ) {
+          const baseDate =
+            task.scheduledAt instanceof Date && !isNaN(task.scheduledAt.getTime())
+              ? new Date(task.scheduledAt)
+              : new Date();
+          const nextDue = nextOccurrenceDate(baseDate, task.recurrence);
+          nextTask = await Task.create({
+            title: task.title,
+            description: task.description,
+            list: task.list,
+            priority: task.priority,
+            user: task.user,
+            recurrence: task.recurrence,
+            scheduledAt: nextDue,
+          });
+        }
+
+        return handleRes(res, 200, true, "Task status updated", {
+          task: mapTask(task),
+          nextTask: nextTask ? mapTask(nextTask) : null,
+        });
       }
       return handleRes(res, 400, false, "Invalid completion status");
     }

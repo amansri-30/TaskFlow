@@ -24,6 +24,7 @@ const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     scheduledAt: t.scheduledAt,
     completed: t.completed,
     completedAt: t.completedAt,
+    recurrence: t.recurrence,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
   }));

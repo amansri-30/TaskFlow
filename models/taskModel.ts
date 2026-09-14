@@ -45,6 +45,11 @@ const TaskSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  recurrence: {
+    type: String,
+    enum: ["none", "daily", "weekly", "monthly"],
+    default: "none",
+  },
 });
 
 const Task = mongoose.models.Task || mongoose.model("Task", TaskSchema);

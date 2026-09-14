@@ -25,11 +25,13 @@ import {
 } from "@/components/ui/select";
 import { listNames } from "@/lib/Data";
 import { useCustomLists } from "@/lib/customLists";
+import { RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
 import { Task } from "@/types";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import axios from "axios";
 import toast from "react-hot-toast";
+import { Repeat } from "lucide-react";
 
 import SearchList02Icon from "@/public/svg/icons/SearchList02Icon";
 import Calendar02Icon from "@/public/svg/icons/Calendar02Icon";
@@ -46,6 +48,9 @@ export function EditTaskDialogContent({
   const [description, setDescription] = useState(task.description || "");
   const [list, setList] = useState(task.list);
   const [priority, setPriority] = useState<string>(task.priority || "medium");
+  const [recurrence, setRecurrence] = useState<Recurrence>(
+    task.recurrence || "none"
+  );
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(() => {
     const raw = task.scheduledAt ?? task.date;
     if (!raw) return undefined;
@@ -77,6 +82,7 @@ export function EditTaskDialogContent({
         list,
         priority,
         dueDate: selectedDate?.toISOString(),
+        recurrence,
       });
       toast.success("Task updated successfully");
       onSaved?.();
@@ -162,6 +168,27 @@ export function EditTaskDialogContent({
               <SelectItem value="high" className="capitalize">
                 High
               </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="flex justify-center items-center gap-1">
+            <Repeat />
+            <Label htmlFor="recurrence" className="text-right">
+              Repeat
+            </Label>
+          </div>
+          <Select value={recurrence} onValueChange={(v) => setRecurrence(v as Recurrence)}>
+            <SelectTrigger className="ring-inset min-w-[150px]">
+              <SelectValue placeholder="Does not repeat" />
+            </SelectTrigger>
+            <SelectContent>
+              {RECURRENCE_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value} className="capitalize">
+                  {opt.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

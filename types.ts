@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import type { Recurrence } from "@/lib/recurrence";
 
 export type User = {
   _id: string;
@@ -34,6 +35,7 @@ export type Task = {
   scheduledAt?: string;
   completed?: boolean;
   completedAt?: string | null;
+  recurrence?: Recurrence;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -37,6 +37,7 @@ import { isRecurrence, type Recurrence } from "@/lib/recurrence";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
+import ActivityHeatmap from "./ActivityHeatmap";
 import {
   Select,
   SelectContent,
@@ -285,23 +286,12 @@ export default function TaskList({
   const pendingCount = total - completedCount;
   const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
 
-  const dayTotals = Array.from({ length: 7 }, (_, i) => {
-    const day = startOfDay(addDays(new Date(), i - 6));
-    return {
-      day,
-      count: tasks.filter(
-        (t) =>
-          t.completed &&
-          t.completedAt &&
-          !isNaN(new Date(t.completedAt).getTime()) &&
-          isSameDay(new Date(t.completedAt), day)
-      ).length,
-    };
-  });
-  const completedThisWeek = dayTotals.reduce((sum, d) => sum + d.count, 0);
-  const chartMax = Math.max(1, ...dayTotals.map((d) => d.count));
-  const dayLabel = (day: Date) =>
-    day.toLocaleDateString(undefined, { weekday: "short" });
+  const weekStart = startOfDay(addDays(new Date(), -6));
+  const completedThisWeek = tasks.filter((t) => {
+    if (!t.completed || !t.completedAt) return false;
+    const d = new Date(t.completedAt);
+    return !isNaN(d.getTime()) && !isBefore(d, weekStart);
+  }).length;
 
   useEffect(() => {
     const todayCount = tasks.filter((t) => {
@@ -482,6 +472,7 @@ export default function TaskList({
         dueDate: task.scheduledAt || null,
         list: task.list || "default",
         priority: task.priority || "medium",
+        recurrence: task.recurrence || "none",
       });
       setLastDeleted(null);
       toast.success("Task restored");
@@ -708,43 +699,9 @@ export default function TaskList({
               {completionPct}% of tasks completed
             </p>
 
-            {/* Weekly activity */}
+            {/* Activity — 12-week heatmap with streaks */}
             <div className="mt-4">
-              <p className="mb-2 text-xs font-medium text-muted-foreground">
-                Tasks completed in the last 7 days
-              </p>
-              <div
-                className="flex h-16 items-end gap-1.5"
-                role="img"
-                aria-label={`Weekly activity: ${completedThisWeek} tasks completed this week`}
-              >
-                {dayTotals.map(({ day, count }, i) => (
-                  <div
-                    key={i}
-                    className="flex h-full flex-1 flex-col items-center justify-end"
-                  >
-                    <span className="text-[10px] leading-none text-muted-foreground">
-                      {count > 0 ? count : ""}
-                    </span>
-                    <div
-                      className={`mt-1 w-full rounded-t ${
-                        count > 0 ? "bg-emerald-500" : "bg-muted"
-                      }`}
-                      style={{
-                        height: `${
-                          count > 0
-                            ? Math.max(10, Math.round((count / chartMax) * 100))
-                            : 4
-                        }%`,
-                      }}
-                      title={`${dayLabel(day)}: ${count}`}
-                    />
-                    <span className="mt-1 text-[10px] leading-none text-muted-foreground">
-                      {dayLabel(day)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <ActivityHeatmap tasks={tasks} />
             </div>
           </section>
 

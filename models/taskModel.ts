@@ -50,6 +50,18 @@ const TaskSchema = new mongoose.Schema({
     enum: ["none", "daily", "weekly", "monthly"],
     default: "none",
   },
+  monthlyDay: {
+    type: Number,
+    default: null,
+  },
+  trashed: {
+    type: Boolean,
+    default: false,
+  },
+  trashedAt: {
+    type: Date,
+    default: null,
+  },
 });
 
 const Task = mongoose.models.Task || mongoose.model("Task", TaskSchema);

@@ -59,16 +59,17 @@ export default function SearchAreaWithAvatarDropdown({
     fetchQuote();
   }, []);
 
-  const handleLogout = () => {
-    dispatch(logoutUser())
-      .unwrap()
-      .then(() => {
-        toast.success("Logout Successfully");
-      })
-      .catch(() => {
-        toast.error("Logout failed");
-      });
+  const handleLogout = async () => {
+    // Wait for the server to clear the httpOnly cookie before navigating,
+    // otherwise the request is aborted and the session survives.
+    try {
+      await dispatch(logoutUser()).unwrap();
+      toast.success("Logout Successfully");
+    } catch {
+      toast.error("Logout failed");
+    } finally {
       window.location.replace("/");
+    }
   };
 
   return (

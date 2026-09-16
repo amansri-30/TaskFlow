@@ -50,6 +50,7 @@ import { useAppDispatch } from "@/hooks";
 import { userActions } from "@/redux/user/userSlice";
 
 import { useCustomLists } from "@/lib/customLists";
+import { listNames } from "@/lib/Data";
 
 import PencilEdit02Icon from "@/public/svg/icons/PencilEdit02Icon";
 
@@ -87,6 +88,7 @@ export default function TaskList({
   const router = useRouter();
   const dispatch = useAppDispatch();
   const [tasks, setTasks] = useState<Task[]>(emptyTasks);
+  const [trashed, setTrashed] = useState<Task[]>(emptyTasks);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
@@ -127,7 +129,7 @@ export default function TaskList({
 
   const handleBatchComplete = async () => {
     if (selectedIncomplete.length === 0) return;
-    const previous = tasks;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
     const target = selectedIncomplete;
     const hadRecurring = target.some(
       (t) => t.recurrence && t.recurrence !== "none"
@@ -144,24 +146,30 @@ export default function TaskList({
           : t
       )
     );
-    try {
-      await Promise.all(
-        target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: true }))
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: true }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      // Only roll back the tasks that actually failed; keep the ones that
+      // succeeded on the server so the UI never shows stale state.
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
-      toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
-      if (hadRecurring) {
-        await refreshSilently();
-        toast.success("Next occurrences scheduled for repeating tasks");
-      }
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to complete selected tasks");
+      toast.error(`Failed to complete ${failed.length} of ${target.length} tasks`);
+      return;
+    }
+    toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
+    if (hadRecurring) {
+      await refreshSilently();
+      toast.success("Next occurrences scheduled for repeating tasks");
     }
   };
 
   const handleBatchReopen = async () => {
     if (selectedCompleted.length === 0) return;
-    const previous = tasks;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
     const target = selectedCompleted;
     const ids = new Set(target.map((t) => t.id));
     setTasks((prev) =>
@@ -169,72 +177,97 @@ export default function TaskList({
         ids.has(t.id) ? { ...t, completed: false, completedAt: null } : t
       )
     );
-    try {
-      await Promise.all(
-        target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: false }))
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: false }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
-      toast.success(`Reopened ${target.length} task${target.length > 1 ? "s" : ""}`);
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to reopen selected tasks");
+      toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
+      return;
     }
+    toast.success(`Reopened ${target.length} task${target.length > 1 ? "s" : ""}`);
   };
 
   const handleBatchSetPriority = async (
     priority: NonNullable<Task["priority"]>
   ) => {
     if (selectedTasks.length === 0) return;
-    const previous = tasks;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
     const target = selectedTasks;
     const ids = new Set(target.map((t) => t.id));
     setTasks((prev) =>
       prev.map((t) => (ids.has(t.id) ? { ...t, priority } : t))
     );
-    try {
-      await Promise.all(
-        target.map((t) => axios.patch(`/api/task/${t.id}`, { priority }))
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { priority }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
-      toast.success(`Priority set to ${priority} for ${target.length} task${target.length > 1 ? "s" : ""}`);
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to update priority");
+      toast.error(`Failed to update priority for ${failed.length} of ${target.length} tasks`);
+      return;
     }
+    toast.success(`Priority set to ${priority} for ${target.length} task${target.length > 1 ? "s" : ""}`);
   };
 
   const handleBatchSetList = async (list: string) => {
     if (selectedTasks.length === 0) return;
-    const previous = tasks;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
     const target = selectedTasks;
     const ids = new Set(target.map((t) => t.id));
     setTasks((prev) =>
       prev.map((t) => (ids.has(t.id) ? { ...t, list } : t))
     );
-    try {
-      await Promise.all(
-        target.map((t) => axios.patch(`/api/task/${t.id}`, { list }))
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { list }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
-      toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to "${list}"`);
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to move tasks");
+      toast.error(`Failed to move ${failed.length} of ${target.length} tasks`);
+      return;
     }
+    toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to "${list}"`);
   };
 
   const handleBatchDelete = async () => {
     const target = selectedTasks;
     if (target.length === 0) return;
-    const previous = tasks;
     const ids = new Set(target.map((t) => t.id));
     setTasks((prev) => prev.filter((t) => !ids.has(t.id)));
     setConfirmBatchDelete(false);
     resetSelection();
-    try {
-      await Promise.all(target.map((t) => axios.delete(`/api/task/${t.id}`)));
-      toast.success(`Deleted ${target.length} task${target.length > 1 ? "s" : ""}`);
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to delete selected tasks");
+    const results = await Promise.allSettled(
+      target.map((t) => axios.delete(`/api/task/${t.id}`))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      setTasks((prev) => [
+        ...prev,
+        ...failed.filter((t) => !prev.some((x) => x.id === t.id)),
+      ]);
+      toast.error(`Failed to move ${failed.length} task${failed.length > 1 ? "s" : ""} to trash`);
+      return;
     }
+    setTrashed((prev) => [
+      ...target.map((t) => ({
+        ...t,
+        trashed: true,
+        trashedAt: new Date().toISOString(),
+      })),
+      ...prev,
+    ]);
+    toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to trash`);
   };
 
   const handleSelectAllShown = () => {
@@ -255,6 +288,7 @@ export default function TaskList({
     try {
       const response = await axios.get("/api/getalltasks");
       setTasks(response.data.tasks || []);
+      setTrashed(response.data.trashed || []);
     } catch (err: any) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         dispatch(userActions.resetUser());
@@ -308,15 +342,24 @@ export default function TaskList({
 
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
 
+  // A list filter is only stale when the list no longer exists anywhere
+  // (static lists + custom lists + lists currently used by tasks). A valid
+  // but empty list must NOT snap the filter back to "all".
+  const knownLists = Array.from(
+    new Set([...lists, ...listNames.map((item) => item.name), ...customLists])
+  );
+
   useEffect(() => {
     const isListFilter = filter.startsWith("list:");
-    if (isListFilter && !lists.includes(filter.slice("list:".length))) {
+    if (isListFilter && !knownLists.includes(filter.slice("list:".length))) {
       onFilterChange("all");
     }
-  }, [filter, lists, onFilterChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, knownLists.join("|"), onFilterChange]);
 
   const term = search.trim().toLowerCase();
   const today = startOfDay(new Date());
+  const trashView = filter === "trash";
 
   const matchesFilter = (t: Task) => {
     if (filter === "today") {
@@ -347,6 +390,15 @@ export default function TaskList({
       (t.description || "").toLowerCase().includes(term)
     );
   });
+
+  const trashedFiltered = trashView
+    ? trashed.filter((t) =>
+        term
+          ? t.title.toLowerCase().includes(term) ||
+            (t.description || "").toLowerCase().includes(term)
+          : true
+      )
+    : [];
 
   const incomplete = filtered.filter((t) => !t.completed);
   const completed = filtered.filter((t) => t.completed);
@@ -409,7 +461,11 @@ export default function TaskList({
   const activeFilterLabel = activeList
     ? activeList
     : FILTERS.find((f) => f.value === filter)?.label ?? "All";
-  const heading = total === 0 ? "All Tasks" : `${activeFilterLabel} Tasks`;
+  const heading = trashView
+    ? "Trash"
+    : total === 0
+    ? "All Tasks"
+    : `${activeFilterLabel} Tasks`;
 
   const handleToggleComplete = async (task: Task, value: boolean) => {
     const previous = tasks;
@@ -445,40 +501,42 @@ export default function TaskList({
     try {
       const response = await axios.get("/api/getalltasks");
       setTasks(response.data.tasks || []);
+      setTrashed(response.data.trashed || []);
     } catch {
       // ignore — next explicit refresh will surface errors
     }
   }, []);
 
   const handleDelete = async (task: Task) => {
-    const previous = tasks;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
     setTasks((prev) => prev.filter((t) => t.id !== task.id));
     try {
+      // Soft delete — the task is recoverable from Trash.
       await axios.delete(`/api/task/${task.id}`);
+      setTrashed((prev) => [
+        { ...task, trashed: true, trashedAt: new Date().toISOString() },
+        ...prev,
+      ]);
       setLastDeleted(task);
-      toast.success("Task deleted");
+      toast.success("Task moved to trash");
     } catch {
-      setTasks(previous);
+      setTasks((prev) =>
+        prev.some((t) => t.id === task.id)
+          ? prev
+          : [...prev, previous.get(task.id) ?? task]
+      );
       toast.error("Failed to delete task");
     }
   };
 
   const restoreTask = async (task: Task) => {
-    const previous = tasks;
     try {
-      await axios.post("/api/newtask", {
-        taskTitle: task.title,
-        description: task.description || "",
-        dueDate: task.scheduledAt || null,
-        list: task.list || "default",
-        priority: task.priority || "medium",
-        recurrence: task.recurrence || "none",
-      });
+      // Rewind the soft delete server-side; id and history are preserved.
+      await axios.patch(`/api/task/${task.id}`, { restore: true });
       setLastDeleted(null);
       toast.success("Task restored");
-      refresh();
+      await refreshSilently();
     } catch {
-      setTasks(previous);
       toast.error("Could not restore task");
     }
   };
@@ -581,33 +639,121 @@ export default function TaskList({
   const handleCompleteAll = async () => {
     const pending = tasks.filter((t) => !t.completed);
     if (pending.length === 0) return;
-    const previous = tasks;
-    setTasks((prev) => prev.map((t) => ({ ...t, completed: true })));
-    try {
-      await Promise.all(
-        pending.map((t) =>
-          axios.patch(`/api/task/${t.id}`, { completed: true })
-        )
+    const previous = new Map(tasks.map((t) => [t.id, t]));
+    const hadRecurring = pending.some(
+      (t) => t.recurrence && t.recurrence !== "none"
+    );
+    setTasks((prev) =>
+      prev.map((t) => ({
+        ...t,
+        completed: true,
+        completedAt: t.completed ? t.completedAt : new Date().toISOString(),
+      }))
+    );
+    const results = await Promise.allSettled(
+      pending.map((t) =>
+        axios.patch(`/api/task/${t.id}`, { completed: true })
+      )
+    );
+    const failed = pending.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
-      toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to complete all tasks");
+      toast.error(`Failed to complete ${failed.length} of ${pending.length} tasks`);
+      return;
+    }
+    toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
+    if (hadRecurring) {
+      await refreshSilently();
+      toast.success("Next occurrences scheduled for repeating tasks");
     }
   };
 
   const handleClearCompleted = async () => {
     const done = tasks.filter((t) => t.completed);
     if (done.length === 0) return;
-    const previous = tasks;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
     setTasks((prev) => prev.filter((t) => !t.completed));
-    try {
-      await Promise.all(done.map((t) => axios.delete(`/api/task/${t.id}`)));
-      toast.success("Cleared completed tasks");
-    } catch {
-      setTasks(previous);
-      toast.error("Failed to clear completed tasks");
+    const results = await Promise.allSettled(
+      done.map((t) => axios.delete(`/api/task/${t.id}`))
+    );
+    const failed = done.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
+      );
+      toast.error(`Failed to move ${failed.length} task${failed.length > 1 ? "s" : ""} to trash`);
+      return;
     }
+    setTrashed((prev) => [
+      ...done.map((t) => ({
+        ...t,
+        trashed: true,
+        trashedAt: new Date().toISOString(),
+      })),
+      ...prev,
+    ]);
+    toast.success("Cleared completed tasks (moved to trash)");
+  };
+
+  const handleRestoreTrashed = async (task: Task) => {
+    try {
+      await axios.patch(`/api/task/${task.id}`, { restore: true });
+      setTrashed((prev) => prev.filter((t) => t.id !== task.id));
+      setLastDeleted((prev) => (prev?.id === task.id ? null : prev));
+      await refreshSilently();
+      toast.success("Task restored from trash");
+    } catch {
+      toast.error("Could not restore task");
+    }
+  };
+
+  const handleDeleteForever = async (task: Task) => {
+    if (
+      !window.confirm(
+        `Permanently delete "${task.title}"? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await axios.delete(`/api/task/${task.id}?permanent=true`);
+      setTrashed((prev) => prev.filter((t) => t.id !== task.id));
+      setLastDeleted((prev) => (prev?.id === task.id ? null : prev));
+      toast.success("Task permanently deleted");
+    } catch {
+      toast.error("Could not delete task");
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    if (trashed.length === 0) return;
+    if (
+      !window.confirm(
+        `Permanently delete all ${trashed.length} task${trashed.length > 1 ? "s" : ""} in trash? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    const results = await Promise.allSettled(
+      trashed.map((t) => axios.delete(`/api/task/${t.id}?permanent=true`))
+    );
+    const failed = trashed.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      setTrashed((prev) =>
+        prev.filter((t) => failed.some((f) => f.id === t.id))
+      );
+      toast.error(
+        `Failed to permanently delete ${failed.length} task${failed.length > 1 ? "s" : ""}`
+      );
+      return;
+    }
+    setTrashed(emptyTasks);
+    setLastDeleted(null);
+    toast.success("Trash emptied");
   };
 
   return (
@@ -649,6 +795,69 @@ export default function TaskList({
         </div>
       ) : loading ? (
         <TaskItemsSkeleton />
+      ) : trashView ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-muted-foreground">
+              Tasks here were moved to trash. Restore them to keep them, or
+              delete them permanently.
+            </p>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={handleEmptyTrash}
+              disabled={trashed.length === 0}
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              Empty trash
+              <span className="ml-1 text-muted-foreground">({trashed.length})</span>
+            </Button>
+          </div>
+
+          {trashedFiltered.length > 0 ? (
+            <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
+              {trashedFiltered.map((task) => (
+                <div
+                  key={task.id}
+                  className="flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group hover:bg-gray-100 dark:hover:bg-neutral-800"
+                >
+                  <div className="flex items-center min-w-0 gap-2">
+                    <span className="text-sm font-medium p-2 leading-none truncate">
+                      {task.title}
+                    </span>
+                    {task.scheduledAt && <DueLabel task={task} />}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleRestoreTrashed(task)}
+                    >
+                      <Undo2 className="mr-1.5 h-4 w-4" />
+                      Restore
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => handleDeleteForever(task)}
+                    >
+                      <Trash2 className="mr-1.5 h-4 w-4" />
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              <div className="px-1 mt-1 text-xs text-muted-foreground">
+                {trashedFiltered.length} trashed task
+                {trashedFiltered.length === 1 ? "" : "s"}
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-muted-foreground">
+              <p>{term ? "No matching trashed tasks" : "Trash is empty."}</p>
+            </div>
+          )}
+        </>
       ) : (
         <>
           {/* Overview / Stats */}
@@ -934,9 +1143,9 @@ export default function TaskList({
               <DialogHeader>
                 <DialogTitle>Clear completed tasks?</DialogTitle>
                 <DialogDescription>
-                  This will permanently delete {completedCount} completed
-                  task{completedCount === 1 ? "" : "s"}. This action cannot be
-                  undone.
+                  This will move {completedCount} completed task
+                  {completedCount === 1 ? "" : "s"} to Trash. You can restore
+                  them from Trash later.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter className="flex gap-2 sm:justify-end">
@@ -962,14 +1171,14 @@ export default function TaskList({
               <DialogHeader>
                 <DialogTitle>Delete {selectedIds.size} task{selectedIds.size === 1 ? "" : "s"}?</DialogTitle>
                 <DialogDescription>
-                  This will permanently delete{" "}
+                  This will move{" "}
                   {selectedTasks.length === 0
                     ? "the selected tasks"
                     : `"${selectedTasks
                         .slice(0, 3)
                         .map((t) => t.title)
-                        .join('", "')}${selectedTasks.length > 3 ? '" and more' : '"'}`}
-                  . This action cannot be undone.
+                        .join('", "')}${selectedTasks.length > 3 ? '" and more' : '"'}`}{" "}
+                  to Trash. You can restore them from Trash later.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter className="flex gap-2 sm:justify-end">
@@ -1170,8 +1379,8 @@ function TaskItem({
             <DialogHeader>
               <DialogTitle>Delete task?</DialogTitle>
               <DialogDescription>
-                Are you sure you want to delete &ldquo;{task.title}&rdquo;?
-                This action cannot be undone.
+                Are you sure you want to delete &ldquo;{task.title}&rdquo;? It
+                will be moved to Trash and can be restored later.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="flex gap-2 sm:justify-end">

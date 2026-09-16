@@ -6,7 +6,13 @@ type AsyncFunction = (req: NextApiRequest, res: NextApiResponse) => Promise<void
 export const catchAsyncError = (asyncFunction: AsyncFunction) => (req: NextApiRequest, res: NextApiResponse) => {
   Promise.resolve(asyncFunction(req, res).catch((err) => {
     if (err?.name === "ValidationError") {
-      return handleRes(res, 400, false, "Invalid input data.");
+      // Surface the actionable schema message (e.g. "Task title cannot
+      // exceed 120 characters") instead of a generic error string.
+      const first = err?.errors ? Object.values(err.errors)[0] : null;
+      const message =
+        (first as { message?: string } | undefined)?.message ||
+        "Invalid input data.";
+      return handleRes(res, 400, false, message);
     }
     if (err?.code === 11000) {
       return handleRes(res, 409, false, "That value is already in use.");

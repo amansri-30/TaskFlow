@@ -197,7 +197,7 @@ export function AddTaskInlineModal({
             <FormItem>
               <Select
                 onValueChange={field.onChange}
-                defaultValue={field.value}
+                value={field.value}
               >
                 <FormControl>
                   <SelectTrigger className="ring-inset lg:min-w-[220px] lg:max-w-full xl:min-w-[300px]">
@@ -222,7 +222,7 @@ export function AddTaskInlineModal({
             <FormItem>
               <Select
                 onValueChange={field.onChange}
-                defaultValue={field.value}
+                value={field.value}
               >
                 <FormControl>
                   <SelectTrigger className="ring-inset lg:min-w-[220px] lg:max-w-full xl:min-w-[300px]">
@@ -251,7 +251,7 @@ export function AddTaskInlineModal({
             <FormItem>
               <Select
                 onValueChange={field.onChange}
-                defaultValue={field.value}
+                value={field.value}
               >
                 <FormControl>
                   <SelectTrigger className="ring-inset lg:min-w-[220px] lg:max-w-full xl:min-w-[300px]">

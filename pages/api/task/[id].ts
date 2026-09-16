@@ -19,9 +19,23 @@ const mapTask = (t: any) => ({
   completed: t.completed,
   completedAt: t.completedAt,
   recurrence: t.recurrence,
+  monthlyDay: t.monthlyDay,
+  trashed: t.trashed,
+  trashedAt: t.trashedAt,
   createdAt: t.createdAt,
   updatedAt: t.updatedAt,
 });
+
+const setMonthlyDay = (task: any, dateValue: unknown) => {
+  if (task.recurrence !== "monthly") {
+    task.monthlyDay = null;
+    return;
+  }
+  const source = dateValue ?? task.scheduledAt ?? null;
+  const d = source ? new Date(source as string) : null;
+  task.monthlyDay =
+    d && !isNaN(d.getTime()) ? d.getDate() : task.monthlyDay ?? null;
+};
 
 const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResponse) => {
   await connectDB();
@@ -49,19 +63,38 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
       if (recurrence !== undefined && !isRecurrence(recurrence)) {
         return handleRes(res, 400, false, "Invalid recurrence. Use none, daily, weekly, or monthly.");
       }
-      task.title = taskTitle ?? task.title;
-      if (description !== undefined) task.description = description;
+      if (taskTitle !== undefined) {
+        if (typeof taskTitle !== "string" || !taskTitle.trim()) {
+          return handleRes(res, 400, false, "Task Title is required");
+        }
+        task.title = taskTitle.trim().slice(0, 120);
+      }
+      if (description !== undefined) task.description = String(description).slice(0, 100);
       if (list !== undefined) task.list = list;
       if (priority !== undefined) task.priority = priority;
       if (dueDate !== undefined) task.scheduledAt = dueDate || null;
-      if (recurrence !== undefined) task.recurrence = recurrence;
+      if (recurrence !== undefined) {
+        task.recurrence = recurrence;
+        // When recurring monthly, capture the anchor day-of-month from the
+        // newly chosen due date so future occurrences never drift.
+        setMonthlyDay(task, dueDate);
+      }
       task.updatedAt = new Date();
       await task.save();
       return handleRes(res, 200, true, "Task updated", { task: mapTask(task) });
     }
 
     case "PATCH": {
-      const { completed } = req.body;
+      const { completed, restore } = req.body;
+
+      if (restore === true) {
+        task.trashed = false;
+        task.trashedAt = null;
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task restored", { task: mapTask(task) });
+      }
+
       if (typeof completed === "boolean") {
         task.completed = completed;
         task.completedAt = completed ? new Date() : null;
@@ -78,16 +111,33 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             task.scheduledAt instanceof Date && !isNaN(task.scheduledAt.getTime())
               ? new Date(task.scheduledAt)
               : new Date();
-          const nextDue = nextOccurrenceDate(baseDate, task.recurrence);
-          nextTask = await Task.create({
-            title: task.title,
-            description: task.description,
-            list: task.list,
-            priority: task.priority,
-            user: task.user,
-            recurrence: task.recurrence,
-            scheduledAt: nextDue,
-          });
+          const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
+          if (nextDue) {
+            // Guard against duplicate next occurrences: reopening and
+            // re-completing the same task (or rapid double clicks) must not
+            // create a second occurrence for the same date.
+            const existing = await Task.findOne({
+              user: task.user,
+              title: task.title,
+              recurrence: task.recurrence,
+              scheduledAt: nextDue,
+              completed: false,
+              trashed: { $ne: true },
+              _id: { $ne: task._id },
+            });
+            if (!existing) {
+              nextTask = await Task.create({
+                title: task.title,
+                description: task.description,
+                list: task.list,
+                priority: task.priority,
+                user: task.user,
+                recurrence: task.recurrence,
+                scheduledAt: nextDue,
+                monthlyDay: task.monthlyDay,
+              });
+            }
+          }
         }
 
         return handleRes(res, 200, true, "Task status updated", {
@@ -99,8 +149,17 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "DELETE": {
-      await task.deleteOne();
-      return handleRes(res, 200, true, "Task deleted");
+      const permanent = req.query.permanent === "true";
+      if (permanent) {
+        await task.deleteOne();
+        return handleRes(res, 200, true, "Task permanently deleted");
+      }
+      // Default: move to trash (recoverable) instead of hard-deleting.
+      task.trashed = true;
+      task.trashedAt = new Date();
+      task.updatedAt = new Date();
+      await task.save();
+      return handleRes(res, 200, true, "Task moved to trash");
     }
 
     default:

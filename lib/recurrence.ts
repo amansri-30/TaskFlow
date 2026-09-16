@@ -23,7 +23,8 @@ export function recurrenceLabel(value: Recurrence | null | undefined): string {
 
 export function nextOccurrenceDate(
   from: Date,
-  recurrence: Recurrence
+  recurrence: Recurrence,
+  monthlyDay?: number | null
 ): Date | null {
   if (recurrence === "none") return null;
 
@@ -40,8 +41,11 @@ export function nextOccurrenceDate(
     return next;
   }
 
-  // monthly — keep the day-of-month, clamping to the last day of longer months
-  const targetDay = next.getDate();
+  // monthly — keep the day-of-month, clamping to the last day of shorter
+  // months. The anchor day is fixed at task creation (monthlyDay), so a
+  // Jan 31 task repeats on Feb 28, Mar 31, Apr 30 — without drifting to the
+  // 28th permanently.
+  const anchorDay = monthlyDay ?? from.getDate();
   next.setDate(1);
   next.setMonth(next.getMonth() + 1);
   const lastDay = new Date(
@@ -49,6 +53,6 @@ export function nextOccurrenceDate(
     next.getMonth() + 1,
     0
   ).getDate();
-  next.setDate(Math.min(targetDay, lastDay));
+  next.setDate(Math.min(anchorDay, lastDay));
   return next;
 }

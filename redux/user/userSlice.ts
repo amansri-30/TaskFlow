@@ -153,6 +153,10 @@ const userSlice = createSlice({
       .addCase(logoutUser.rejected, (state, action) => {
         state.isLoading = false;
         state.error = (action.payload as string) || "Logout failed. Please try again.";
+        // The user clearly intends to sign out; don't leave a stale
+        // persisted session that can cause /login <-> /dashboard loops.
+        state.isAuthenticated = false;
+        state.user = null;
       })
 
       .addCase(getCurrentUser.pending, (state) => {

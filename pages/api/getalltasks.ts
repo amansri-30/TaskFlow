@@ -13,9 +13,12 @@ const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
   const user = await isAuthenticated(req, res);
   if (!user) return handleRes(res, 401, false, "No account is logged in");
 
-  const tasks = await Task.find({ user: user._id }).sort({ createdAt: -1 });
+  const [tasks, trashed] = await Promise.all([
+    Task.find({ user: user._id, trashed: { $ne: true } }).sort({ createdAt: -1 }),
+    Task.find({ user: user._id, trashed: true }).sort({ trashedAt: -1 }),
+  ]);
 
-  const mapped = tasks.map((t) => ({
+  const mapTask = (t: any) => ({
     id: t._id.toString(),
     title: t.title,
     description: t.description,
@@ -25,11 +28,17 @@ const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     completed: t.completed,
     completedAt: t.completedAt,
     recurrence: t.recurrence,
+    monthlyDay: t.monthlyDay,
+    trashed: t.trashed,
+    trashedAt: t.trashedAt,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
-  }));
+  });
 
-  handleRes(res, 200, true, "Fetched all tasks", { tasks: mapped });
+  handleRes(res, 200, true, "Fetched all tasks", {
+    tasks: tasks.map(mapTask),
+    trashed: trashed.map(mapTask),
+  });
 });
 
 export default getAllTasks;

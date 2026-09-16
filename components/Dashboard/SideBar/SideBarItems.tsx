@@ -19,6 +19,7 @@ const FILTER_BY_NAME: Record<string, string> = {
   Today: "today",
   Scheduled: "scheduled",
   "Filter & Label": "all",
+  Trash: "trash",
 };
 
 export const SideBarItems = ({

@@ -81,7 +81,7 @@ export function EditTaskDialogContent({
         description,
         list,
         priority,
-        dueDate: selectedDate?.toISOString(),
+        dueDate: selectedDate ? selectedDate.toISOString() : null,
         recurrence,
       });
       toast.success("Task updated successfully");
@@ -222,6 +222,17 @@ export function EditTaskDialogContent({
                 }
                 initialFocus
               />
+              {selectedDate && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2 w-full"
+                  onClick={() => setSelectedDate(undefined)}
+                >
+                  Clear date
+                </Button>
+              )}
             </PopoverContent>
           </Popover>
         </div>

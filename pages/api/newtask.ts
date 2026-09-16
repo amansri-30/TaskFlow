@@ -28,6 +28,12 @@ const newTask = catchAsyncError(
     const user = await isAuthenticated(req, res);
     if (!user) return handleRes(res, 401, false, "No account is logged in");
 
+    const effectiveRecurrence = recurrence || "none";
+    const monthlyDay =
+      effectiveRecurrence === "monthly" && dueDate
+        ? new Date(dueDate).getDate()
+        : null;
+
     await Task.create({
       title: taskTitle,
       description: description || "",
@@ -35,7 +41,8 @@ const newTask = catchAsyncError(
       scheduledAt: dueDate,
       list,
       priority: priority || "medium",
-      recurrence: recurrence || "none",
+      recurrence: effectiveRecurrence,
+      monthlyDay,
     });
 
     handleRes(res, 200, true, "Task created successfully");

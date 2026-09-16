@@ -4,6 +4,8 @@ import Calendar03Icon from "@/public/svg/icons/Calendar03Icon";
 import TimeScheduleIcon from "@/public/svg/icons/TimeScheduleIcon";
 import PreferenceHorizontalIcon from "@/public/svg/icons/PreferenceHorizontalIcon";
 
+import { Trash2 } from "lucide-react";
+
 import ProfileIcon from "@/public/svg/icons/ProfileIcon";
 import UserGroupIcon from "@/public/svg/icons/UserGroupIcon";
 import ShoppingBasket02Icon from "@/public/svg/icons/ShoppingBasket02Icon";
@@ -39,6 +41,11 @@ export const SideBarList = [
     name: "Filter & Label",
     link: "/loggedin/filter-labels",
     icon: <PreferenceHorizontalIcon className="w-5 h-5" />,
+  },
+  {
+    name: "Trash",
+    link: "/loggedin/trash",
+    icon: <Trash2 className="w-5 h-5" />,
   },
 ];
 

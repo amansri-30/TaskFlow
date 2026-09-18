@@ -5,14 +5,21 @@ import SideBar from "./SideBar/SideBar";
 import TaskList from "./TaskList";
 import SearchAreaWithAvatarDropdown from "./SearchAreaWithAvatarDropdown";
 
+export type TagStat = { name: string; count: number };
+
 export type TaskStats = {
   today: number;
   scheduled: number;
+  tags: TagStat[];
 };
 
 export function Dashboard() {
   const [filter, setFilter] = useState<string>("all");
-  const [stats, setStats] = useState<TaskStats>({ today: 0, scheduled: 0 });
+  const [stats, setStats] = useState<TaskStats>({
+    today: 0,
+    scheduled: 0,
+    tags: [],
+  });
   const [search, setSearch] = useState<string>("");
 
   return (
@@ -22,7 +29,6 @@ export function Dashboard() {
         activeFilter={filter}
         onSelectFilter={setFilter}
         stats={stats}
-        onSearchChange={setSearch}
       />
       <div className="flex flex-col">
         {/* // Search bar with account avatar dropdown menu */}

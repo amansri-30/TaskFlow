@@ -108,7 +108,7 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
     }
   }
 
-  const totals = tasks.filter((t) => t.completed && t.completedAt).length;
+  const windowTotal = cells.reduce((sum, cell) => sum + cell.count, 0);
   const { current, best } = getStreaks(tasks);
 
   const gridStyle = {
@@ -130,7 +130,7 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
         className="grid gap-[3px]"
         style={{ gridTemplateColumns: `repeat(${WEEKS}, 10px)` }}
         role="img"
-        aria-label={`Activity heatmap: ${totals} tasks completed in the last ${WEEKS} weeks`}
+        aria-label={`Activity heatmap: ${windowTotal} tasks completed in the last ${WEEKS} weeks`}
       >
         {monthCells.map(({ col, label }) => (
           <span
@@ -146,7 +146,7 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
         className="grid gap-[3px]"
         style={gridStyle}
         role="img"
-        aria-label={`Activity heatmap: ${totals} tasks completed in the last ${WEEKS} weeks`}
+        aria-label={`Activity heatmap: ${windowTotal} tasks completed in the last ${WEEKS} weeks`}
       >
         {cells.map((cell) => (
           <div
@@ -172,7 +172,7 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
         <span className="h-2.5 w-2.5 rounded-[2px] bg-emerald-600" />
         <span className="h-2.5 w-2.5 rounded-[2px] bg-emerald-700" />
         <span>More</span>
-        <span className="ml-2">{totals} completions</span>
+        <span className="ml-2">{windowTotal} completions</span>
         {best > 1 && <span className="ml-1">· Best: {best}</span>}
       </div>
     </div>

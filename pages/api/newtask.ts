@@ -5,6 +5,7 @@ import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
 import isAuthenticated from "@/middleware/isAuthenticated";
 import { isRecurrence } from "@/lib/recurrence";
+import { normalizeTags } from "@/lib/tags";
 
 const newTask = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
@@ -12,7 +13,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, dueDate, list, priority, recurrence } = req.body;
+    const { taskTitle, description, dueDate, list, priority, recurrence, tags } = req.body;
 
     if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
 
@@ -43,6 +44,7 @@ const newTask = catchAsyncError(
       priority: priority || "medium",
       recurrence: effectiveRecurrence,
       monthlyDay,
+      tags: normalizeTags(tags),
     });
 
     handleRes(res, 200, true, "Task created successfully");

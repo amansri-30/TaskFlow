@@ -32,6 +32,7 @@ import {
 import { listNames } from "@/lib/Data";
 import { useCustomLists } from "@/lib/customLists";
 import { RECURRENCE_OPTIONS } from "@/lib/recurrence";
+import { normalizeTags } from "@/lib/tags";
 
 import ArrowDown05Icon from "@/public/svg/icons/ArrowDown05Icon";
 import CalendarUpload01Icon from "@/public/svg/icons/CalendarUpload01Icon";
@@ -47,6 +48,7 @@ const FormSchema = z.object({
   list: z.string().default(""),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   recurrence: z.enum(["none", "daily", "weekly", "monthly"]).default("none"),
+  tagsText: z.string().default(""),
 });
 
 type AddTaskInlineModalProps = {
@@ -67,6 +69,7 @@ export function AddTaskInlineModal({
       list: "default",
       priority: "medium",
       recurrence: "none",
+      tagsText: "",
     },
   });
 
@@ -83,6 +86,7 @@ export function AddTaskInlineModal({
       list: data.list,
       priority: data.priority,
       recurrence: data.recurrence,
+      tags: normalizeTags(data.tagsText),
     };
 
     try {
@@ -140,6 +144,22 @@ export function AddTaskInlineModal({
                   placeholder="Description"
                   maxLength={100}
                   className="resize-none ring-inset rounded-tl-none rounded-tr-none border-dashed"
+                  {...field}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="tagsText"
+          render={({ field }) => (
+            <FormItem>
+              <FormControl>
+                <Input
+                  placeholder="Tags (comma separated, max 5) — e.g. work, urgent"
+                  maxLength={100}
+                  className="ring-inset mt-2"
                   {...field}
                 />
               </FormControl>

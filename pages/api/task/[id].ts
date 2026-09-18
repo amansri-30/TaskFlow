@@ -8,6 +8,7 @@ import {
   isRecurrence,
   nextOccurrenceDate,
 } from "@/lib/recurrence";
+import { normalizeTags } from "@/lib/tags";
 
 const mapTask = (t: any) => ({
   id: t._id.toString(),
@@ -20,6 +21,7 @@ const mapTask = (t: any) => ({
   completedAt: t.completedAt,
   recurrence: t.recurrence,
   monthlyDay: t.monthlyDay,
+  tags: t.tags || [],
   trashed: t.trashed,
   trashedAt: t.trashedAt,
   createdAt: t.createdAt,
@@ -55,7 +57,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, dueDate, list, priority, recurrence } = req.body;
+      const { taskTitle, description, dueDate, list, priority, recurrence, tags } = req.body;
       const validPriorities = ["low", "medium", "high"];
       if (priority && !validPriorities.includes(priority)) {
         return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
@@ -79,6 +81,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // newly chosen due date so future occurrences never drift.
         setMonthlyDay(task, dueDate);
       }
+      if (tags !== undefined) task.tags = normalizeTags(tags);
       task.updatedAt = new Date();
       await task.save();
       return handleRes(res, 200, true, "Task updated", { task: mapTask(task) });

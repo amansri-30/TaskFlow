@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
+import { normalizeTags } from "@/lib/tags";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
@@ -106,10 +107,8 @@ export default function TaskList({
   const resetSelection = () => setSelectedIds(new Set());
 
   const toggleEdit = () => {
-    setEdit((prev) => {
-      if (prev) resetSelection();
-      return !prev;
-    });
+    if (edit) resetSelection();
+    setEdit((prev) => !prev);
   };
 
   const handleSelect = (id: string) =>
@@ -337,7 +336,17 @@ export default function TaskList({
       if (!t.scheduledAt) return false;
       return !isNaN(new Date(t.scheduledAt).getTime());
     }).length;
-    onStatsChange({ today: todayCount, scheduled: scheduledCount });
+    const tagCounts = new Map<string, number>();
+    for (const t of tasks) {
+      for (const tag of t.tags || []) {
+        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+      }
+    }
+    const tags = Array.from(tagCounts.entries()).map(([name, count]) => ({
+      name,
+      count,
+    })) as { name: string; count: number }[];
+    onStatsChange({ today: todayCount, scheduled: scheduledCount, tags });
   }, [tasks, onStatsChange]);
 
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
@@ -379,6 +388,9 @@ export default function TaskList({
     if (filter.startsWith("list:")) {
       return t.list === filter.slice("list:".length);
     }
+    if (filter.startsWith("tag:")) {
+      return (t.tags || []).includes(filter.slice("tag:".length));
+    }
     return true;
   };
 
@@ -408,6 +420,17 @@ export default function TaskList({
   const batchListOptions = Array.from(
     new Set<string>([...lists, ...customLists])
   );
+
+  // Build tag chips from all active tasks, sorted by popularity.
+  const tagCounts = new Map<string, number>();
+  for (const t of tasks) {
+    for (const tag of t.tags || []) {
+      tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+    }
+  }
+  const tagChips = Array.from(tagCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12);
   const priorityRank: Record<string, number> = { high: 0, medium: 1, low: 2 };
   const dueTime = (t: Task) =>
     t.scheduledAt && !isNaN(new Date(t.scheduledAt).getTime())
@@ -460,6 +483,8 @@ export default function TaskList({
     : null;
   const activeFilterLabel = activeList
     ? activeList
+    : filter.startsWith("tag:")
+    ? `#${filter.slice("tag:".length)}`
     : FILTERS.find((f) => f.value === filter)?.label ?? "All";
   const heading = trashView
     ? "Trash"
@@ -548,6 +573,7 @@ export default function TaskList({
     list: string;
     priority: string;
     recurrence: Recurrence;
+    tags: string[];
   };
 
   const normalizeImportedTask = (item: any): ImportPayload | null => {
@@ -577,7 +603,15 @@ export default function TaskList({
       : isRecurrence(item.repeat)
       ? item.repeat
       : "none";
-    return { taskTitle: title, description, dueDate, list, priority, recurrence };
+    return {
+      taskTitle: title,
+      description,
+      dueDate,
+      list,
+      priority,
+      recurrence,
+      tags: normalizeTags(item.tags),
+    };
   };
 
   const handleImportFile = async (file: File) => {
@@ -930,6 +964,14 @@ export default function TaskList({
                 active={filter === `list:${list}`}
                 onClick={() => onFilterChange(`list:${list}`)}
                 label={list}
+              />
+            ))}
+            {tagChips.map(([name, count]) => (
+              <FilterChip
+                key={`tag:${name}`}
+                active={filter === `tag:${name}`}
+                onClick={() => onFilterChange(`tag:${name}`)}
+                label={`#${name} (${count})`}
               />
             ))}
           </div>
@@ -1350,6 +1392,9 @@ function TaskItem({
           edit ? "" : "opacity-0 group-hover:opacity-100"
         }`}
       >
+        {(task.tags || []).slice(0, 3).map((tag) => (
+          <TagChip key={tag} tag={tag} />
+        ))}
         {task.priority && task.priority !== "medium" && (
           <PriorityChip priority={task.priority} completed={!!task.completed} />
         )}
@@ -1404,6 +1449,16 @@ function TaskItem({
         </Dialog>
       </div>
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+
+function TagChip({ tag }: { tag: string }) {
+  return (
+    <span className="flex items-center gap-1 rounded-full border border-neutral-200 bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+      #{tag}
+    </span>
   );
 }
 

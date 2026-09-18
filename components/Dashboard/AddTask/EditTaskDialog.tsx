@@ -26,6 +26,7 @@ import {
 import { listNames } from "@/lib/Data";
 import { useCustomLists } from "@/lib/customLists";
 import { RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
+import { normalizeTags } from "@/lib/tags";
 import { Task } from "@/types";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -51,6 +52,7 @@ export function EditTaskDialogContent({
   const [recurrence, setRecurrence] = useState<Recurrence>(
     task.recurrence || "none"
   );
+  const [tagsText, setTagsText] = useState((task.tags || []).join(", "));
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(() => {
     const raw = task.scheduledAt ?? task.date;
     if (!raw) return undefined;
@@ -83,6 +85,7 @@ export function EditTaskDialogContent({
         priority,
         dueDate: selectedDate ? selectedDate.toISOString() : null,
         recurrence,
+        tags: normalizeTags(tagsText),
       });
       toast.success("Task updated successfully");
       onSaved?.();
@@ -123,6 +126,20 @@ export function EditTaskDialogContent({
             onChange={(e) => setDescription(e.target.value)}
             maxLength={100}
             className="line-clamp-3 ring-inset"
+          />
+        </div>
+
+        <div className="items-center gap-4">
+          <Label htmlFor="tags" className="pl-1 text-right">
+            Tags
+          </Label>
+          <Input
+            id="tags"
+            value={tagsText}
+            onChange={(e) => setTagsText(e.target.value)}
+            placeholder="Comma separated, max 5"
+            maxLength={100}
+            className="ring-inset"
           />
         </div>
 

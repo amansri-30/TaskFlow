@@ -50,6 +50,10 @@ const TaskSchema = new mongoose.Schema({
     enum: ["none", "daily", "weekly", "monthly"],
     default: "none",
   },
+  tags: {
+    type: [String],
+    default: () => [],
+  },
   monthlyDay: {
     type: Number,
     default: null,

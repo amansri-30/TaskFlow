@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { useRouter } from "next/navigation";
 import PageTemplate from "@/components/elements/PageTemplate";
 import { useAppDispatch, useAppSelector } from "@/hooks";
-import { loginUser } from "@/redux/user/userSlice";
+import { loginUser, getCurrentUser } from "@/redux/user/userSlice";
 
 export default function LoginForm() {
   const dispatch = useAppDispatch();
@@ -23,14 +23,42 @@ export default function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [redirectTo, setRedirectTo] = useState<string | null>(null);
   const userId = useAppSelector(state => state.user.user?._id);
   const isLoading = useAppSelector(state => state.user.isLoading);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get("redirect");
+    setRedirectTo(target && target.startsWith("/") ? target : null);
+  }, []);
+
+  // A persisted user alone is not proof of a valid session. Re-validate the
+  // cookie-backed user on the server before trusting the persisted state; if the
+  // cookie is gone, getCurrentUser rejects and clears the user, breaking the
+  // login <-> dashboard redirect loop.
+  useEffect(() => {
+    const userIdAtMount = userId;
+    if (!userIdAtMount) return;
+    let cancelled = false;
+    dispatch(getCurrentUser()).then((result) => {
+      if (!cancelled && getCurrentUser.rejected.match(result)) {
+        toast.error("Your session has expired. Please log in again.", {
+          duration: 4000,
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatch]);
+
+  useEffect(() => {
     if (userId) {
-      router.push("/dashboard");
+      router.replace(redirectTo || "/dashboard");
     }
-  }, [userId, router]);
+  }, [userId, router, redirectTo]);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();

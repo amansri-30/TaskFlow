@@ -57,7 +57,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, dueDate, list, priority, recurrence, tags } = req.body;
+      const { taskTitle, description, dueDate, list, priority, recurrence, tags, monthlyDay } = req.body;
       const validPriorities = ["low", "medium", "high"];
       if (priority && !validPriorities.includes(priority)) {
         return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
@@ -82,6 +82,13 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         setMonthlyDay(task, dueDate);
       }
       if (tags !== undefined) task.tags = normalizeTags(tags);
+      if (monthlyDay !== undefined) {
+        if (recurrence === "monthly" && Number.isInteger(monthlyDay)) {
+          task.monthlyDay = Math.min(31, Math.max(1, monthlyDay));
+        } else {
+          setMonthlyDay(task, dueDate);
+        }
+      }
       task.updatedAt = new Date();
       await task.save();
       return handleRes(res, 200, true, "Task updated", { task: mapTask(task) });
@@ -110,21 +117,26 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           task.recurrence &&
           task.recurrence !== "none"
         ) {
+          // Never derive the next occurrence from a due date that already
+          // passed. Completing an overdue recurring task should still produce
+          // a future occurrence; otherwise each completion keeps creating a
+          // backdated one and the chain is permanently behind schedule.
+          const now = new Date();
+          const scheduled = task.scheduledAt instanceof Date ? task.scheduledAt : null;
           const baseDate =
-            task.scheduledAt instanceof Date && !isNaN(task.scheduledAt.getTime())
-              ? new Date(task.scheduledAt)
-              : new Date();
+            scheduled && scheduled.getTime() > now.getTime() ? scheduled : now;
           const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
           if (nextDue) {
             // Guard against duplicate next occurrences: reopening and
             // re-completing the same task (or rapid double clicks) must not
-            // create a second occurrence for the same date.
+            // create a second occurrence for the same date. Include completed
+            // occurrences so re-completing a reopened parent can't spawn a
+            // duplicate beside one that already exists for that date.
             const existing = await Task.findOne({
               user: task.user,
               title: task.title,
               recurrence: task.recurrence,
               scheduledAt: nextDue,
-              completed: false,
               trashed: { $ne: true },
               _id: { $ne: task._id },
             });

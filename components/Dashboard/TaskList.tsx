@@ -391,6 +391,9 @@ export default function TaskList({
     if (filter.startsWith("tag:")) {
       return (t.tags || []).includes(filter.slice("tag:".length));
     }
+    if (filter.startsWith("priority:")) {
+      return t.priority === filter.slice("priority:".length);
+    }
     return true;
   };
 
@@ -485,6 +488,8 @@ export default function TaskList({
     ? activeList
     : filter.startsWith("tag:")
     ? `#${filter.slice("tag:".length)}`
+    : filter.startsWith("priority:")
+    ? `${filter.slice("priority:".length)} priority`
     : FILTERS.find((f) => f.value === filter)?.label ?? "All";
   const heading = trashView
     ? "Trash"
@@ -493,7 +498,7 @@ export default function TaskList({
     : `${activeFilterLabel} Tasks`;
 
   const handleToggleComplete = async (task: Task, value: boolean) => {
-    const previous = tasks;
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
     setTasks((prev) =>
       prev.map((t) =>
         t.id === task.id
@@ -517,7 +522,13 @@ export default function TaskList({
         toast.success("Next occurrence scheduled");
       }
     } catch {
-      setTasks(previous);
+      // Roll back only this task — restoring a whole-task snapshot could
+      // clobber concurrent updates from other handlers.
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id ? { ...previousTask } : t
+        )
+      );
       toast.error("Failed to update task");
     }
   };
@@ -972,6 +983,14 @@ export default function TaskList({
                 active={filter === `tag:${name}`}
                 onClick={() => onFilterChange(`tag:${name}`)}
                 label={`#${name} (${count})`}
+              />
+            ))}
+            {(["high", "medium", "low"] as const).map((p) => (
+              <FilterChip
+                key={`priority:${p}`}
+                active={filter === `priority:${p}`}
+                onClick={() => onFilterChange(`priority:${p}`)}
+                label={`${p} priority`}
               />
             ))}
           </div>
@@ -1542,8 +1561,9 @@ function DueLabel({ task }: { task: Task }) {
 
 function dateFnsFormat(date: Date): string {
   const today = startOfDay(new Date());
-  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
-  if (isSameDay(date, tomorrow)) return "Tomorrow";
+  // addDays is DST-safe; the old +24h arithmetic could skip/duplicate a day
+  // across a daylight-saving boundary.
+  if (isSameDay(date, addDays(today, 1))) return "Tomorrow";
   return date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",

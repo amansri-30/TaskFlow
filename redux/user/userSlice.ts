@@ -123,6 +123,10 @@ const userSlice = createSlice({
       .addCase(loginUser.rejected, (state, action) => {
         state.isLoading = false;
         state.isAuthenticated = false;
+        // A failed login after a previously persisted user must not leave the
+        // stale user behind, or the login page would bounce straight to the
+        // dashboard again.
+        state.user = null;
         state.error = (action.payload as string) || "Login failed. Please try again.";
       })
 
@@ -138,6 +142,7 @@ const userSlice = createSlice({
       .addCase(registerUser.rejected, (state, action) => {
         state.isLoading = false;
         state.isAuthenticated = false;
+        state.user = null;
         state.error = action.payload as string;
       })
 

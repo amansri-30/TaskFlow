@@ -13,7 +13,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, dueDate, list, priority, recurrence, tags } = req.body;
+    const { taskTitle, description, dueDate, list, priority, recurrence, tags, monthlyDay } = req.body;
 
     if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
 
@@ -30,10 +30,17 @@ const newTask = catchAsyncError(
     if (!user) return handleRes(res, 401, false, "No account is logged in");
 
     const effectiveRecurrence = recurrence || "none";
-    const monthlyDay =
-      effectiveRecurrence === "monthly" && dueDate
-        ? new Date(dueDate).getDate()
+    const clientMonthlyDay =
+      Number.isInteger(monthlyDay) && effectiveRecurrence === "monthly"
+        ? Math.min(31, Math.max(1, monthlyDay))
         : null;
+    // The client sends the day-of-month anchored to the user's local calendar;
+    // fall back to the server-side day only when it didn't.
+    const resolvedMonthlyDay =
+      clientMonthlyDay ??
+      (effectiveRecurrence === "monthly" && dueDate
+        ? new Date(dueDate).getDate()
+        : null);
 
     await Task.create({
       title: taskTitle,
@@ -43,7 +50,7 @@ const newTask = catchAsyncError(
       list,
       priority: priority || "medium",
       recurrence: effectiveRecurrence,
-      monthlyDay,
+      monthlyDay: resolvedMonthlyDay,
       tags: normalizeTags(tags),
     });
 

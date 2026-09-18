@@ -86,6 +86,10 @@ export function EditTaskDialogContent({
         dueDate: selectedDate ? selectedDate.toISOString() : null,
         recurrence,
         tags: normalizeTags(tagsText),
+        monthlyDay:
+          recurrence === "monthly" && selectedDate
+            ? selectedDate.getDate()
+            : undefined,
       });
       toast.success("Task updated successfully");
       onSaved?.();

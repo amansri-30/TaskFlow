@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
@@ -19,7 +19,7 @@ export default function NotificationButton() {
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
 
-  const fetchTasks = async () => {
+  const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
       const response = await axios.get("/api/getalltasks");
@@ -29,15 +29,18 @@ export default function NotificationButton() {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchTasks();
   }, []);
 
   useEffect(() => {
+    fetchTasks();
+    const onFocus = () => fetchTasks();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [fetchTasks]);
+
+  useEffect(() => {
     if (open) fetchTasks();
-  }, [open]);
+  }, [open, fetchTasks]);
 
   const today = startOfDay(new Date());
   const dueToday = tasks.filter((t) => {

@@ -87,6 +87,12 @@ export function AddTaskInlineModal({
       priority: data.priority,
       recurrence: data.recurrence,
       tags: normalizeTags(data.tagsText),
+      // Anchor monthly recurrence to the user's local calendar day rather than
+      // letting the server derive it from the UTC-serialized date.
+      monthlyDay:
+        data.recurrence === "monthly" && data.dueDate
+          ? data.dueDate.getDate()
+          : undefined,
     };
 
     try {

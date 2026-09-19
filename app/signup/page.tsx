@@ -20,7 +20,7 @@ import SecurityPasswordIcon from "@/public/svg/icons/SecurityPasswordIcon";
 import PageTemplate from "@/components/elements/PageTemplate";
 import AlertBox from "@/components/elements/AlertBox";
 import { useAppDispatch, useAppSelector } from "@/hooks";
-import { registerUser } from "@/redux/user/userSlice";
+import { registerUser, getCurrentUser } from "@/redux/user/userSlice";
 
 export default function SignUp() {
   const [firstName, setFirstName] = useState("");
@@ -40,6 +40,16 @@ export default function SignUp() {
       router.push("/dashboard");
     }
   }, [isAuthenticated, router]);
+
+  // A persisted "authenticated" flag alone is not proof of a live session.
+  // Re-validate the cookie-backed user before trusting it, otherwise a stale
+  // flag bounces here -> /dashboard -> /login forever.
+  useEffect(() => {
+    const authedAtMount = isAuthenticated;
+    if (!authedAtMount) return;
+    dispatch(getCurrentUser());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (error) {

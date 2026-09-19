@@ -31,6 +31,7 @@ import {
   Undo2,
   TrendingUp,
   Repeat,
+  Copy,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
@@ -460,12 +461,15 @@ export default function TaskList({
   });
 
   const handleExport = () => {
-    if (filtered.length === 0) return;
+    // Export what the user is actually looking at — in the Trash view that's
+    // the trashed tasks, not the active list.
+    const exported = trashView ? trashedFiltered : filtered;
+    if (exported.length === 0) return;
     const payload = {
       app: "TaskFlow",
       exportedAt: new Date().toISOString(),
-      count: filtered.length,
-      tasks: filtered,
+      count: exported.length,
+      tasks: exported,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
@@ -478,7 +482,7 @@ export default function TaskList({
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-    toast.success(`Exported ${filtered.length} task${filtered.length > 1 ? "s" : ""}`);
+    toast.success(`Exported ${exported.length} task${exported.length > 1 ? "s" : ""}`);
   };
 
   const activeList = filter.startsWith("list:")
@@ -742,6 +746,48 @@ export default function TaskList({
       ...prev,
     ]);
     toast.success("Cleared completed tasks (moved to trash)");
+  };
+
+  const duplicatePayload = (task: Task) => ({
+    taskTitle: `${task.title} (copy)`,
+    description: task.description || "",
+    dueDate: task.scheduledAt || null,
+    list: task.list,
+    priority: task.priority || "medium",
+    recurrence: task.recurrence || "none",
+    tags: task.tags || [],
+    monthlyDay: task.recurrence === "monthly" ? task.monthlyDay : undefined,
+  });
+
+  const handleDuplicateTask = async (task: Task) => {
+    try {
+      await axios.post("/api/newtask", duplicatePayload(task));
+      toast.success("Task duplicated");
+      await refreshSilently();
+    } catch {
+      toast.error("Failed to duplicate task");
+    }
+  };
+
+  const handleBatchDuplicate = async () => {
+    if (selectedTasks.length === 0) return;
+    let ok = 0;
+    let fail = 0;
+    for (const task of selectedTasks) {
+      try {
+        await axios.post("/api/newtask", duplicatePayload(task));
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    if (ok > 0) {
+      toast.success(`Duplicated ${ok} task${ok > 1 ? "s" : ""}`);
+      await refreshSilently();
+    }
+    if (fail > 0) {
+      toast.error(`${fail} task${fail > 1 ? "s" : ""} could not be duplicated`);
+    }
   };
 
   const handleRestoreTrashed = async (task: Task) => {
@@ -1048,6 +1094,15 @@ export default function TaskList({
                     <Undo2 className="mr-1.5 h-4 w-4" />
                     Reopen
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleBatchDuplicate}
+                    disabled={selectedTasks.length === 0}
+                  >
+                    <Copy className="mr-1.5 h-4 w-4" />
+                    Duplicate
+                  </Button>
                   <div className="flex items-center gap-1.5">
                     <Flag className="h-4 w-4 text-muted-foreground" />
                     <Select
@@ -1268,6 +1323,7 @@ export default function TaskList({
                   onSelect={handleSelect}
                   onToggle={handleToggleComplete}
                   onDelete={handleDelete}
+                  onDuplicate={handleDuplicateTask}
                   onRefresh={refresh}
                 />
               ))
@@ -1299,6 +1355,7 @@ export default function TaskList({
                     onSelect={handleSelect}
                     onToggle={handleToggleComplete}
                     onDelete={handleDelete}
+                    onDuplicate={handleDuplicateTask}
                     onRefresh={refresh}
                   />
                 ))}
@@ -1366,6 +1423,7 @@ function TaskItem({
   onSelect,
   onToggle,
   onDelete,
+  onDuplicate,
   onRefresh,
 }: {
   task: Task;
@@ -1374,6 +1432,7 @@ function TaskItem({
   onSelect: (id: string) => void;
   onToggle: (task: Task, value: boolean) => void;
   onDelete: (task: Task) => void;
+  onDuplicate: (task: Task) => void;
   onRefresh: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1429,6 +1488,14 @@ function TaskItem({
           </DialogTrigger>
           <EditTaskDialogContent task={task} onSaved={onRefresh} />
         </Dialog>
+        <button
+          aria-label={`Duplicate ${task.title}`}
+          title="Duplicate task"
+          onClick={() => onDuplicate(task)}
+          className="p-1 hover:bg-muted rounded"
+        >
+          <Copy className="h-4 w-4" />
+        </button>
         <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
         <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
           <DialogTrigger asChild>

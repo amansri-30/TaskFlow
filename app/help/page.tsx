@@ -1,6 +1,6 @@
 "use client";
 import PageTemplate from "@/components/elements/PageTemplate";
-import React from "react";
+import React, { useMemo, useState } from "react";
 import {
   Accordion,
   AccordionContent,
@@ -15,14 +15,17 @@ import { motion } from "framer-motion";
 import {FadeDown} from "animease";
 
 export default function Help() {
-  const initial = { opacity: 0, y: -20 };
-  const animate = ({ delay }: { delay: number }) => {
-    return {
-      opacity: 1,
-      y: 0,
-      transition: { delay: { delay }, duration: 0.6 },
-    };
-  };
+  const [query, setQuery] = useState("");
+  const term = query.trim().toLowerCase();
+
+  const filteredFaqs = useMemo(() => {
+    if (!term) return faqData;
+    return faqData.filter(
+      (item) =>
+        item.question.toLowerCase().includes(term) ||
+        item.answer.toLowerCase().includes(term)
+    );
+  }, [term]);
 
   return (
     <PageTemplate>
@@ -54,10 +57,13 @@ export default function Help() {
             className="flex justify-center mb-6"
           >
             <div className="relative w-full max-w-2xl">
-              <Input className="pl-10" placeholder="Search for a question" />
-              <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">
-                <Search02Icon />
-              </div>
+              <Search02Icon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+              <Input
+                className="pl-10"
+                placeholder="Search for a question"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
             </div>
           </FadeDown>
 
@@ -81,31 +87,37 @@ export default function Help() {
           </FadeDown>
 
           <Accordion type="single" collapsible className="w-full space-y-4">
-            {faqData.map((item, id) => (
-              <motion.div
-                key={id}
-                initial={{ opacity: 0, y: -20 }}
-                animate={{
-                  opacity: 1,
-                  y: 0,
-                  transition: { delay: id * 0.1 + 0.7, duration: 0.6 },
-                }}
-              >
-                <AccordionItem key={id} value={`item-${id}`} className="">
-                  <motion.div
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    <AccordionTrigger className="text-left text-base md:text-lg font-semibold text-gray-800 dark:text-white mb-0 hover:text-red-600 dark:hover:text-red-300 hover:no-underline">
-                      {item.question}
-                    </AccordionTrigger>
-                  </motion.div>
-                  <AccordionContent className="text-base md:text-lg leading-relaxed">
-                    {item.answer}
-                  </AccordionContent>
-                </AccordionItem>
-              </motion.div>
-            ))}
+            {filteredFaqs.length === 0 ? (
+              <p className="py-4 text-center text-gray-500 dark:text-gray-400">
+                No questions match &ldquo;{query}&rdquo;. Try a different search.
+              </p>
+            ) : (
+              filteredFaqs.map((item, id) => (
+                <motion.div
+                  key={id}
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{
+                    opacity: 1,
+                    y: 0,
+                    transition: { delay: id * 0.1 + 0.7, duration: 0.6 },
+                  }}
+                >
+                  <AccordionItem key={id} value={`item-${id}`} className="">
+                    <motion.div
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.98 }}
+                    >
+                      <AccordionTrigger className="text-left text-base md:text-lg font-semibold text-gray-800 dark:text-white mb-0 hover:text-red-600 dark:hover:text-red-300 hover:no-underline">
+                        {item.question}
+                      </AccordionTrigger>
+                    </motion.div>
+                    <AccordionContent className="text-base md:text-lg leading-relaxed">
+                      {item.answer}
+                    </AccordionContent>
+                  </AccordionItem>
+                </motion.div>
+              ))
+            )}
           </Accordion>
 
           <FadeDown

@@ -32,6 +32,7 @@ import {
   TrendingUp,
   Repeat,
   Copy,
+  Pin,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
@@ -60,6 +61,7 @@ const emptyTasks: Task[] = [];
 
 const FILTERS = [
   { value: "all", label: "All" },
+  { value: "pinned", label: "Pinned" },
   { value: "today", label: "Today" },
   { value: "scheduled", label: "Scheduled" },
   { value: "overdue", label: "Overdue" },
@@ -372,6 +374,7 @@ export default function TaskList({
   const trashView = filter === "trash";
 
   const matchesFilter = (t: Task) => {
+    if (filter === "pinned") return !!t.pinned;
     if (filter === "today") {
       if (!t.scheduledAt) return false;
       const d = new Date(t.scheduledAt);
@@ -417,7 +420,9 @@ export default function TaskList({
     : [];
 
   const incomplete = filtered.filter((t) => !t.completed);
-  const completed = filtered.filter((t) => t.completed);
+  const pinFirst = (a: Task, b: Task) =>
+    Number(b.pinned ?? false) - Number(a.pinned ?? false);
+  const completed = [...filtered.filter((t) => t.completed)].sort(pinFirst);
 
   const allShownSelected =
     filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id));
@@ -445,6 +450,8 @@ export default function TaskList({
       ? 0
       : new Date(t.createdAt).getTime();
   const sortedIncomplete = [...incomplete].sort((a, b) => {
+    const pinnedDiff = pinFirst(a, b);
+    if (pinnedDiff !== 0) return pinnedDiff;
     const rank =
       (priorityRank[a.priority || "medium"] ?? 1) -
       (priorityRank[b.priority || "medium"] ?? 1);
@@ -534,6 +541,22 @@ export default function TaskList({
         )
       );
       toast.error("Failed to update task");
+    }
+  };
+
+  const handleTogglePin = async (task: Task) => {
+    const next = !task.pinned;
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
+    setTasks((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, pinned: next } : t))
+    );
+    try {
+      await axios.patch(`/api/task/${task.id}`, { pinned: next });
+    } catch {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...previousTask } : t))
+      );
+      toast.error("Failed to update pin");
     }
   };
 
@@ -1322,6 +1345,7 @@ export default function TaskList({
                   selected={selectedIds.has(task.id)}
                   onSelect={handleSelect}
                   onToggle={handleToggleComplete}
+                  onTogglePin={handleTogglePin}
                   onDelete={handleDelete}
                   onDuplicate={handleDuplicateTask}
                   onRefresh={refresh}
@@ -1354,6 +1378,7 @@ export default function TaskList({
                     selected={selectedIds.has(task.id)}
                     onSelect={handleSelect}
                     onToggle={handleToggleComplete}
+                    onTogglePin={handleTogglePin}
                     onDelete={handleDelete}
                     onDuplicate={handleDuplicateTask}
                     onRefresh={refresh}
@@ -1422,6 +1447,7 @@ function TaskItem({
   selected,
   onSelect,
   onToggle,
+  onTogglePin,
   onDelete,
   onDuplicate,
   onRefresh,
@@ -1431,6 +1457,7 @@ function TaskItem({
   selected: boolean;
   onSelect: (id: string) => void;
   onToggle: (task: Task, value: boolean) => void;
+  onTogglePin: (task: Task) => void;
   onDelete: (task: Task) => void;
   onDuplicate: (task: Task) => void;
   onRefresh: () => void;
@@ -1470,6 +1497,18 @@ function TaskItem({
           edit ? "" : "opacity-0 group-hover:opacity-100"
         }`}
       >
+        <button
+          aria-label={task.pinned ? `Unpin ${task.title}` : `Pin ${task.title}`}
+          title={task.pinned ? "Unpin task" : "Pin task"}
+          onClick={() => onTogglePin(task)}
+          className={`p-1 rounded ${
+            task.pinned
+              ? "text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950"
+              : "hover:bg-muted"
+          }`}
+        >
+          <Pin className={`h-4 w-4 ${task.pinned ? "fill-amber-500" : ""}`} />
+        </button>
         {(task.tags || []).slice(0, 3).map((tag) => (
           <TagChip key={tag} tag={tag} />
         ))}

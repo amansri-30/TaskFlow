@@ -15,15 +15,19 @@ const logIn = catchAsyncError(
     const {email, password} = req.body;
     if (!email || !password) return handleRes(res, 400, false, "All fields required!!!");
 
+    // Look up with the same normalization used at registration so a user who
+    // signed up with mixed-case email can always log in.
+    const normalizedEmail = String(email).trim().toLowerCase();
+
     await connectDB();
 
-    const userWithPassword = await User.findOne({email}).select("+password");
+    const userWithPassword = await User.findOne({email: normalizedEmail}).select("+password");
     if (!userWithPassword) return handleRes(res, 400, false, "Invalid email or password");
 
     const passwordMatched = await bcrypt.compare(password, userWithPassword.password);
     if (!passwordMatched) return handleRes(res, 400, false, "Invalid email or password");
 
-    const user = await User.findOne({email});
+    const user = await User.findOne({email: normalizedEmail});
 
     const token = generateJWTToken(user._id);
     saveCookie(res, token, true);

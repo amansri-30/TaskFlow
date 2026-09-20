@@ -20,6 +20,7 @@ const FILTER_BY_NAME: Record<string, string> = {
   Scheduled: "scheduled",
   "Filter & Label": "all",
   Trash: "trash",
+  Pinned: "pinned",
 };
 
 export const SideBarItems = ({

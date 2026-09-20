@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import crypto from "crypto";
 import connectDB from "../../../lib/connectDB";
 import User from "@/models/userModel";
 import { handleRes } from "@/middleware/resHandler";
@@ -18,13 +19,27 @@ const forgotPassword = catchAsyncError(
 
     const user = await User.findOne({
       email: email.trim().toLowerCase(),
-    }).select("_id");
+    });
 
     if (!user) {
       return handleRes(res, 404, false, "No account found with this email");
     }
 
-    handleRes(res, 200, true, "Password reset link sent", { exists: true });
+    // Create a one-time reset token (hashed at rest) that expires in 60 minutes.
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(resetToken)
+      .digest("hex");
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpire = new Date(Date.now() + 60 * 60 * 1000);
+    await user.save();
+
+    handleRes(res, 200, true, "Password reset link sent", {
+      resetToken,
+      expiresInMinutes: 60,
+    });
   }
 );
 

@@ -38,6 +38,7 @@ export type Task = {
   recurrence?: Recurrence;
   monthlyDay?: number;
   tags?: string[];
+  pinned?: boolean;
   trashed?: boolean;
   trashedAt?: string | null;
   createdAt?: string;

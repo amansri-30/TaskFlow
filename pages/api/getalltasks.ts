@@ -30,6 +30,7 @@ const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     recurrence: t.recurrence,
     monthlyDay: t.monthlyDay,
     tags: t.tags || [],
+    pinned: t.pinned,
     trashed: t.trashed,
     trashedAt: t.trashedAt,
     createdAt: t.createdAt,

@@ -22,6 +22,7 @@ const mapTask = (t: any) => ({
   recurrence: t.recurrence,
   monthlyDay: t.monthlyDay,
   tags: t.tags || [],
+  pinned: t.pinned,
   trashed: t.trashed,
   trashedAt: t.trashedAt,
   createdAt: t.createdAt,
@@ -95,7 +96,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore } = req.body;
+      const { completed, restore, pinned, priority, list } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -103,6 +104,33 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task restored", { task: mapTask(task) });
+      }
+
+      if (typeof pinned === "boolean") {
+        task.pinned = pinned;
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task pin updated", {
+          task: mapTask(task),
+        });
+      }
+
+      if (typeof priority === "string" && ["low", "medium", "high"].includes(priority)) {
+        task.priority = priority;
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task priority updated", {
+          task: mapTask(task),
+        });
+      }
+
+      if (typeof list === "string" && list.trim()) {
+        task.list = list.trim().slice(0, 50);
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task list updated", {
+          task: mapTask(task),
+        });
       }
 
       if (typeof completed === "boolean") {

@@ -4,7 +4,7 @@ import Calendar03Icon from "@/public/svg/icons/Calendar03Icon";
 import TimeScheduleIcon from "@/public/svg/icons/TimeScheduleIcon";
 import PreferenceHorizontalIcon from "@/public/svg/icons/PreferenceHorizontalIcon";
 
-import { Trash2 } from "lucide-react";
+import { Trash2, Pin } from "lucide-react";
 
 import ProfileIcon from "@/public/svg/icons/ProfileIcon";
 import UserGroupIcon from "@/public/svg/icons/UserGroupIcon";
@@ -26,6 +26,11 @@ export const SideBarList = [
     name: "Inbox",
     link: "/loggedin/inbox",
     icon: <InboxIcon className="w-5 h-5" />,
+  },
+  {
+    name: "Pinned",
+    link: "/loggedin/inbox",
+    icon: <Pin className="w-5 h-5" />,
   },
   {
     name: "Today",

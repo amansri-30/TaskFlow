@@ -10,6 +10,8 @@ const UserSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
+        trim: true,
+        lowercase: true,
         validate: isEmail
     },
     password: {
@@ -17,6 +19,13 @@ const UserSchema = new mongoose.Schema({
         required: true,
         minLength: [10, 'Password must be atleast 10 Characters'],
         select: false
+    },
+    resetPasswordToken: {
+        type: String,
+        select: false,
+    },
+    resetPasswordExpire: {
+        type: Date,
     },
     createdAt: {
         type: Date,

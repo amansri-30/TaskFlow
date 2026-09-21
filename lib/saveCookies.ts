@@ -7,6 +7,6 @@ export function saveCookie(res: NextApiResponse, token: string | null, set: bool
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
-        maxAge: set ? 60 * 60 * 24 * 10 : 0 // 10 Days
+        maxAge: set ? 60 * 60 * 24 * 15 : 0 // 15 Days — matches the 15d JWT expiry
     }));
 }

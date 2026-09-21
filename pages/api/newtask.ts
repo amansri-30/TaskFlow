@@ -13,7 +13,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, dueDate, list, priority, recurrence, tags, monthlyDay } = req.body;
+    const { taskTitle, description, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned } = req.body;
 
     if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
 
@@ -42,6 +42,8 @@ const newTask = catchAsyncError(
         ? new Date(dueDate).getDate()
         : null);
 
+    const normalizedCompleted = typeof completed === "boolean" ? completed : false;
+
     await Task.create({
       title: taskTitle,
       description: description || "",
@@ -52,6 +54,14 @@ const newTask = catchAsyncError(
       recurrence: effectiveRecurrence,
       monthlyDay: resolvedMonthlyDay,
       tags: normalizeTags(tags),
+      completed: normalizedCompleted,
+      completedAt:
+        normalizedCompleted && completedAt
+          ? new Date(completedAt)
+          : normalizedCompleted
+          ? new Date()
+          : null,
+      pinned: typeof pinned === "boolean" ? pinned : false,
     });
 
     handleRes(res, 200, true, "Task created successfully");

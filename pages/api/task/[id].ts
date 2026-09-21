@@ -96,7 +96,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list } = req.body;
+      const { completed, restore, pinned, priority, list, snooze } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -104,6 +104,28 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task restored", { task: mapTask(task) });
+      }
+
+      if (snooze === true) {
+        if (!task.recurrence || task.recurrence === "none") {
+          return handleRes(res, 400, false, "Only recurring tasks can be snoozed");
+        }
+        // Keep the same base-date rule as the complete branch: never compute a
+        // next occurrence from a due date that already passed.
+        const now = new Date();
+        const scheduled = task.scheduledAt instanceof Date ? task.scheduledAt : null;
+        const baseDate =
+          scheduled && scheduled.getTime() > now.getTime() ? scheduled : now;
+        const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
+        if (!nextDue) {
+          return handleRes(res, 400, false, "Could not compute a next occurrence");
+        }
+        task.scheduledAt = nextDue;
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task snoozed until the next occurrence", {
+          task: mapTask(task),
+        });
       }
 
       if (typeof pinned === "boolean") {
@@ -178,6 +200,8 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                 recurrence: task.recurrence,
                 scheduledAt: nextDue,
                 monthlyDay: task.monthlyDay,
+                tags: task.tags || [],
+                pinned: task.pinned,
               });
             }
           }

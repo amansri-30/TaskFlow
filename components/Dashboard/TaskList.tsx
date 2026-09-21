@@ -33,6 +33,7 @@ import {
   Repeat,
   Copy,
   Pin,
+  TimerReset,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
@@ -105,6 +106,7 @@ export default function TaskList({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
+  const [snoozingId, setSnoozingId] = useState<string | null>(null);
   const customLists = useCustomLists();
 
   const resetSelection = () => setSelectedIds(new Set());
@@ -152,6 +154,7 @@ export default function TaskList({
       target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: true }))
     );
     const failed = target.filter((_, i) => results[i].status === "rejected");
+    const succeededCount = target.length - failed.length;
     if (failed.length > 0) {
       // Only roll back the tasks that actually failed; keep the ones that
       // succeeded on the server so the UI never shows stale state.
@@ -160,10 +163,12 @@ export default function TaskList({
         prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
       toast.error(`Failed to complete ${failed.length} of ${target.length} tasks`);
-      return;
+    } else {
+      toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
     }
-    toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
-    if (hadRecurring) {
+    // Always re-fetch after recurring tasks are involved — even on partial
+    // failure the server may have created next occurrences we haven't seen.
+    if (hadRecurring && succeededCount > 0) {
       await refreshSilently();
       toast.success("Next occurrences scheduled for repeating tasks");
     }
@@ -253,23 +258,29 @@ export default function TaskList({
       target.map((t) => axios.delete(`/api/task/${t.id}`))
     );
     const failed = target.filter((_, i) => results[i].status === "rejected");
+    const succeeded = target.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
       setTasks((prev) => [
         ...prev,
         ...failed.filter((t) => !prev.some((x) => x.id === t.id)),
       ]);
       toast.error(`Failed to move ${failed.length} task${failed.length > 1 ? "s" : ""} to trash`);
-      return;
+    } else {
+      toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to trash`);
     }
-    setTrashed((prev) => [
-      ...target.map((t) => ({
-        ...t,
-        trashed: true,
-        trashedAt: new Date().toISOString(),
-      })),
-      ...prev,
-    ]);
-    toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to trash`);
+    // Track every task that was actually trashed server-side — including a
+    // partial success — so nothing vanishes from both the active list and
+    // the Trash view.
+    if (succeeded.length > 0) {
+      setTrashed((prev) => [
+        ...succeeded.map((t) => ({
+          ...t,
+          trashed: true,
+          trashedAt: new Date().toISOString(),
+        })),
+        ...prev,
+      ]);
+    }
   };
 
   const handleSelectAllShown = () => {
@@ -427,7 +438,11 @@ export default function TaskList({
   const allShownSelected =
     filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id));
   const batchListOptions = Array.from(
-    new Set<string>([...lists, ...customLists])
+    new Set<string>([
+      ...listNames.map((item) => item.name),
+      ...lists,
+      ...customLists,
+    ])
   );
 
   // Build tag chips from all active tasks, sorted by popularity.
@@ -560,6 +575,37 @@ export default function TaskList({
     }
   };
 
+  const handleSnooze = async (task: Task) => {
+    if (!task.recurrence || task.recurrence === "none") return;
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
+    setSnoozingId(task.id);
+    try {
+      const response = await axios.patch(`/api/task/${task.id}`, {
+        snooze: true,
+      });
+      const updated = response.data?.task as Task | null | undefined;
+      if (updated) {
+        setTasks((prev) =>
+          prev.map((t) => (t.id === task.id ? { ...updated } : t))
+        );
+        const rawDate = updated.scheduledAt;
+        const next = rawDate ? new Date(rawDate) : new Date(NaN);
+        toast.success(
+          !isNaN(next.getTime())
+            ? `Snoozed until ${next.toLocaleDateString()}`
+            : "Snoozed to next occurrence"
+        );
+      }
+    } catch {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...previousTask } : t))
+      );
+      toast.error("Failed to snooze task");
+    } finally {
+      setSnoozingId(null);
+    }
+  };
+
   const refreshSilently = useCallback(async () => {
     try {
       const response = await axios.get("/api/getalltasks");
@@ -612,6 +658,9 @@ export default function TaskList({
     priority: string;
     recurrence: Recurrence;
     tags: string[];
+    completed?: boolean;
+    completedAt?: string | null;
+    pinned?: boolean;
   };
 
   const normalizeImportedTask = (item: any): ImportPayload | null => {
@@ -641,6 +690,15 @@ export default function TaskList({
       : isRecurrence(item.repeat)
       ? item.repeat
       : "none";
+    // Preserve lifecycle fields on a reimport so a backup round-trip doesn't
+    // resurrect completed/pinned work as brand-new open tasks.
+    let completedAt: string | null = null;
+    if (item.completed === true) {
+      const rawCompletedAt = item.completedAt ?? null;
+      if (rawCompletedAt && !isNaN(new Date(rawCompletedAt).getTime())) {
+        completedAt = new Date(rawCompletedAt).toISOString();
+      }
+    }
     return {
       taskTitle: title,
       description,
@@ -649,6 +707,9 @@ export default function TaskList({
       priority,
       recurrence,
       tags: normalizeTags(item.tags),
+      completed: item.completed === true,
+      completedAt: item.completed === true ? completedAt : null,
+      pinned: item.pinned === true,
     };
   };
 
@@ -709,18 +770,25 @@ export default function TaskList({
   };
 
   const handleCompleteAll = async () => {
-    const pending = tasks.filter((t) => !t.completed);
+    // Operate on the visible (filtered/search) pending tasks only — never the
+    // whole task list hidden behind the current filter.
+    const pending = incomplete;
     if (pending.length === 0) return;
     const previous = new Map(tasks.map((t) => [t.id, t]));
     const hadRecurring = pending.some(
       (t) => t.recurrence && t.recurrence !== "none"
     );
+    const ids = new Set(pending.map((t) => t.id));
     setTasks((prev) =>
-      prev.map((t) => ({
-        ...t,
-        completed: true,
-        completedAt: t.completed ? t.completedAt : new Date().toISOString(),
-      }))
+      prev.map((t) =>
+        ids.has(t.id)
+          ? {
+              ...t,
+              completed: true,
+              completedAt: t.completed ? t.completedAt : new Date().toISOString(),
+            }
+          : t
+      )
     );
     const results = await Promise.allSettled(
       pending.map((t) =>
@@ -728,47 +796,54 @@ export default function TaskList({
       )
     );
     const failed = pending.filter((_, i) => results[i].status === "rejected");
+    const succeededCount = pending.length - failed.length;
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
       setTasks((prev) =>
         prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
       toast.error(`Failed to complete ${failed.length} of ${pending.length} tasks`);
-      return;
+    } else {
+      toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
     }
-    toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
-    if (hadRecurring) {
+    if (hadRecurring && succeededCount > 0) {
       await refreshSilently();
       toast.success("Next occurrences scheduled for repeating tasks");
     }
   };
 
   const handleClearCompleted = async () => {
-    const done = tasks.filter((t) => t.completed);
+    // Clear only the visible completed tasks (respects the active filter/search).
+    const done = completed;
     if (done.length === 0) return;
     const previous = new Map(tasks.map((t) => [t.id, t]));
-    setTasks((prev) => prev.filter((t) => !t.completed));
+    const ids = new Set(done.map((t) => t.id));
+    setTasks((prev) => prev.filter((t) => !ids.has(t.id)));
     const results = await Promise.allSettled(
       done.map((t) => axios.delete(`/api/task/${t.id}`))
     );
     const failed = done.filter((_, i) => results[i].status === "rejected");
+    const succeeded = done.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
       setTasks((prev) =>
         prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
       toast.error(`Failed to move ${failed.length} task${failed.length > 1 ? "s" : ""} to trash`);
-      return;
+    } else {
+      toast.success("Cleared completed tasks (moved to trash)");
     }
-    setTrashed((prev) => [
-      ...done.map((t) => ({
-        ...t,
-        trashed: true,
-        trashedAt: new Date().toISOString(),
-      })),
-      ...prev,
-    ]);
-    toast.success("Cleared completed tasks (moved to trash)");
+    // Track what actually reached the trash even on partial failure.
+    if (succeeded.length > 0) {
+      setTrashed((prev) => [
+        ...succeeded.map((t) => ({
+          ...t,
+          trashed: true,
+          trashedAt: new Date().toISOString(),
+        })),
+        ...prev,
+      ]);
+    }
   };
 
   const duplicatePayload = (task: Task) => ({
@@ -1346,6 +1421,8 @@ export default function TaskList({
                   onSelect={handleSelect}
                   onToggle={handleToggleComplete}
                   onTogglePin={handleTogglePin}
+                  onSnooze={handleSnooze}
+                  snoozing={snoozingId === task.id}
                   onDelete={handleDelete}
                   onDuplicate={handleDuplicateTask}
                   onRefresh={refresh}
@@ -1379,6 +1456,8 @@ export default function TaskList({
                     onSelect={handleSelect}
                     onToggle={handleToggleComplete}
                     onTogglePin={handleTogglePin}
+                    onSnooze={handleSnooze}
+                    snoozing={snoozingId === task.id}
                     onDelete={handleDelete}
                     onDuplicate={handleDuplicateTask}
                     onRefresh={refresh}
@@ -1448,6 +1527,8 @@ function TaskItem({
   onSelect,
   onToggle,
   onTogglePin,
+  onSnooze,
+  snoozing,
   onDelete,
   onDuplicate,
   onRefresh,
@@ -1458,6 +1539,8 @@ function TaskItem({
   onSelect: (id: string) => void;
   onToggle: (task: Task, value: boolean) => void;
   onTogglePin: (task: Task) => void;
+  onSnooze: (task: Task) => void;
+  snoozing: boolean;
   onDelete: (task: Task) => void;
   onDuplicate: (task: Task) => void;
   onRefresh: () => void;
@@ -1509,6 +1592,19 @@ function TaskItem({
         >
           <Pin className={`h-4 w-4 ${task.pinned ? "fill-amber-500" : ""}`} />
         </button>
+        {!task.completed && task.recurrence && task.recurrence !== "none" && (
+          <button
+            aria-label={`Snooze ${task.title}`}
+            title="Snooze to next occurrence (stays incomplete)"
+            onClick={() => onSnooze(task)}
+            disabled={snoozing}
+            className={`p-1 hover:bg-muted rounded ${
+              snoozing ? "opacity-50 cursor-not-allowed" : ""
+            }`}
+          >
+            <TimerReset className="h-4 w-4" />
+          </button>
+        )}
         {(task.tags || []).slice(0, 3).map((tag) => (
           <TagChip key={tag} tag={tag} />
         ))}

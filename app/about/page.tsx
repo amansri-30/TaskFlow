@@ -108,7 +108,7 @@ export default function About() {
             variants={itemVariants}
           >
             <CustomLinkButton
-              href="subscribe-newsletter"
+              href="/subscribe-newsletter"
               rightIcon={<MailOpenIcon />}
             >
               Subscribe to Newsletter

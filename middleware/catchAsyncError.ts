@@ -14,6 +14,10 @@ export const catchAsyncError = (asyncFunction: AsyncFunction) => (req: NextApiRe
         "Invalid input data.";
       return handleRes(res, 400, false, message);
     }
+    if (err?.name === "CastError") {
+      // Malformed ids (e.g. /api/task/abc) are a client error, not a 500.
+      return handleRes(res, 400, false, "Invalid id provided.");
+    }
     if (err?.code === 11000) {
       return handleRes(res, 409, false, "That value is already in use.");
     }

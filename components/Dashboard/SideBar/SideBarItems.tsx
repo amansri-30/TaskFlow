@@ -43,15 +43,23 @@ export const SideBarItems = ({
       {/* list of inbox, today, scheduled, filter & label */}
       {SideBarList.map(({ name, icon }, id) => {
         const value = FILTER_BY_NAME[name] ?? "all";
+        // "Filter & Label" is a section heading here, not a filter — sharing
+        // the "all" value with Inbox would double-highlight both on load.
+        const isHeading = name === "Filter & Label";
         const count = name === "Today" ? stats.today : name === "Scheduled" ? stats.scheduled : 0;
         return (
           <button
             key={id}
-            onClick={() => onSelectFilter(value)}
-            aria-pressed={activeFilter === value}
+            onClick={() => {
+              if (!isHeading) onSelectFilter(value);
+            }}
+            aria-pressed={isHeading ? undefined : activeFilter === value}
             className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
-              activeFilter === value && "bg-muted text-primary"
+              "flex items-center gap-3 rounded-lg px-3 py-2 transition-all",
+              isHeading
+                ? "font-semibold text-muted-foreground cursor-default"
+                : "hover:text-primary",
+              !isHeading && activeFilter === value && "bg-muted text-primary"
             )}
           >
             {icon} {name}

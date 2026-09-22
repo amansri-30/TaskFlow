@@ -10,7 +10,7 @@ import generateJWTToken from "@/lib/generateJwtToken";
 
 const logIn = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
-    if (req.method !== "POST") return handleRes(res, 400, false, "Only post request is allowed");
+    if (req.method !== "POST") return handleRes(res, 405, false, "Only post request is allowed");
 
     const {email, password} = req.body;
     if (!email || !password) return handleRes(res, 400, false, "All fields required!!!");

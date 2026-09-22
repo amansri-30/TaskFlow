@@ -111,8 +111,12 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
   const windowTotal = cells.reduce((sum, cell) => sum + cell.count, 0);
   const { current, best } = getStreaks(tasks);
 
+  // Cells are pushed week-major (weeks 0..11, days 0..6), so the grid must
+  // flow DOWN each column (one column per week). The default row-major flow
+  // would scramble the last 12 weeks into the wrong positions.
   const gridStyle = {
     gridTemplateColumns: `repeat(${WEEKS}, 10px)`,
+    gridAutoFlow: "column" as const,
     gridAutoRows: "10px",
   };
 

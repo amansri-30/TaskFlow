@@ -9,7 +9,7 @@ import { catchAsyncError } from "@/middleware/catchAsyncError";
 const resetPassword = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST")
-      return handleRes(res, 400, false, "Only POST requests are allowed");
+      return handleRes(res, 405, false, "Only POST requests are allowed");
 
     const { token, password } = req.body;
     if (!token || typeof token !== "string" || !password) {

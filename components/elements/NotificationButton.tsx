@@ -55,6 +55,9 @@ export default function NotificationButton() {
   });
 
   const alertCount = dueToday.length + overdue.length;
+  const shownOverdue = overdue.slice(0, MAX_SHOWN).length;
+  const shownDueToday = dueToday.slice(0, MAX_SHOWN).length;
+  const hidden = alertCount - (shownOverdue + shownDueToday);
 
   const renderItem = (t: Task, isOverdue: boolean) => (
     <li
@@ -139,11 +142,11 @@ export default function NotificationButton() {
                 </ul>
               </>
             )}
-            {alertCount > MAX_SHOWN * 2 && (
-              <p className="px-2 pt-2 text-xs text-muted-foreground">
-                +{alertCount - MAX_SHOWN * 2} more
-              </p>
-            )}
+            {hidden > 0 && (
+                <p className="px-2 pt-2 text-xs text-muted-foreground">
+                  +{hidden} more
+                </p>
+              )}
           </div>
         )}
       </PopoverContent>

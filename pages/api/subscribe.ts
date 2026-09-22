@@ -9,7 +9,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const subscribeHandler = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST")
-      return handleRes(res, 400, false, "Only POST requests are allowed");
+      return handleRes(res, 405, false, "Only POST requests are allowed");
 
     const { email } = req.body;
     if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email.trim())) {

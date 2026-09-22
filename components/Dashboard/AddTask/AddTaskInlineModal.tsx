@@ -42,6 +42,7 @@ import { FadeDown } from "animease";
 const FormSchema = z.object({
   taskTitle: z
     .string()
+    .trim()
     .min(2, { message: "Task Title must be at least 2 characters." }),
   description: z.string().optional().default(""),
   dueDate: z.date().optional(),

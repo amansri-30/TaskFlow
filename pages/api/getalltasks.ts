@@ -6,7 +6,7 @@ import { catchAsyncError } from "@/middleware/catchAsyncError";
 import isAuthenticated from "@/middleware/isAuthenticated";
 
 const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResponse) => {
-  if (req.method !== "GET") return handleRes(res, 400, false, "Only get request is allowed");
+  if (req.method !== "GET") return handleRes(res, 405, false, "Only get request is allowed");
 
   await connectDB();
 

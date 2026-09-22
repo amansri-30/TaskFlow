@@ -42,6 +42,7 @@ import { normalizeTags } from "@/lib/tags";
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
 import ActivityHeatmap from "./ActivityHeatmap";
+import CommandPalette from "./CommandPalette";
 import {
   Select,
   SelectContent,
@@ -107,6 +108,7 @@ export default function TaskList({
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
   const [snoozingId, setSnoozingId] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const customLists = useCustomLists();
 
   const resetSelection = () => setSelectedIds(new Set());
@@ -325,6 +327,25 @@ export default function TaskList({
   useEffect(() => {
     fetchTasks();
   }, [fetchTasks, refreshKey]);
+
+  // Batch selection is scoped to what's visible: when the active filter or
+  // search changes, drop the selection so batch actions can never silently
+  // target tasks hidden by the new view.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filter, search]);
+
+  // Global quick-search palette (Cmd/Ctrl+K).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
@@ -947,6 +968,18 @@ export default function TaskList({
 
   return (
     <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => {
+          setPaletteOpen(false);
+          resetSelection();
+        }}
+        tasks={tasks}
+        onToggleComplete={handleToggleComplete}
+        onTogglePin={handleTogglePin}
+        onNavigate={onFilterChange}
+        onSearch={onSearchChange}
+      />
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-lg font-semibold md:text-2xl">{heading}</h1>
         <div className="flex items-center gap-2">
@@ -1270,22 +1303,26 @@ export default function TaskList({
               size="sm"
               variant="outline"
               onClick={handleCompleteAll}
-              disabled={pendingCount === 0}
+              disabled={incomplete.length === 0}
             >
               <CheckCheck className="mr-1.5 h-4 w-4" />
               Complete all
-              <span className="ml-1 text-muted-foreground">({pendingCount})</span>
+              <span className="ml-1 text-muted-foreground">
+                ({incomplete.length})
+              </span>
             </Button>
             <Button
               size="sm"
               variant="outline"
               onClick={() => setConfirmClear(true)}
-              disabled={completedCount === 0}
+              disabled={completed.length === 0}
               className="text-red-600 hover:text-red-600"
             >
               <Trash2 className="mr-1.5 h-4 w-4" />
               Clear completed
-              <span className="ml-1 text-muted-foreground">({completedCount})</span>
+              <span className="ml-1 text-muted-foreground">
+                ({completed.length})
+              </span>
             </Button>
             <div className="flex items-center gap-1.5">
               <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
@@ -1357,8 +1394,8 @@ export default function TaskList({
               <DialogHeader>
                 <DialogTitle>Clear completed tasks?</DialogTitle>
                 <DialogDescription>
-                  This will move {completedCount} completed task
-                  {completedCount === 1 ? "" : "s"} to Trash. You can restore
+                  This will move {completed.length} completed task
+                  {completed.length === 1 ? "" : "s"} to Trash. You can restore
                   them from Trash later.
                 </DialogDescription>
               </DialogHeader>

@@ -9,13 +9,16 @@ import { normalizeTags } from "@/lib/tags";
 
 const newTask = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
-    if (req.method !== "POST") return handleRes(res, 400, false, "Only POST requests are allowed");
+    if (req.method !== "POST") return handleRes(res, 405, false, "Only POST requests are allowed");
 
     await connectDB();
 
     const { taskTitle, description, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned } = req.body;
 
-    if (!taskTitle) return handleRes(res, 400, false, "Task Title is required");
+    if (!taskTitle || !String(taskTitle).trim())
+      return handleRes(res, 400, false, "Task Title is required");
+
+    const normalizedTitle = String(taskTitle).trim().slice(0, 120);
 
     const validPriorities = ["low", "medium", "high"];
     if (priority && !validPriorities.includes(priority)) {
@@ -45,7 +48,7 @@ const newTask = catchAsyncError(
     const normalizedCompleted = typeof completed === "boolean" ? completed : false;
 
     await Task.create({
-      title: taskTitle,
+      title: normalizedTitle,
       description: description || "",
       user: user._id,
       scheduledAt: dueDate,

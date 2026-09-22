@@ -177,14 +177,14 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             scheduled && scheduled.getTime() > now.getTime() ? scheduled : now;
           const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
           if (nextDue) {
-            // Guard against duplicate next occurrences: reopening and
-            // re-completing the same task (or rapid double clicks) must not
-            // create a second occurrence for the same date. Include completed
-            // occurrences so re-completing a reopened parent can't spawn a
-            // duplicate beside one that already exists for that date.
+            // Guard against duplicate next occurrences created for the SAME chain.
+            // Scope by list so two independent tasks that merely share a title
+            // (same recurrence landing on the same date) don't silently kill
+            // each other's recurrence chain.
             const existing = await Task.findOne({
               user: task.user,
               title: task.title,
+              list: task.list,
               recurrence: task.recurrence,
               scheduledAt: nextDue,
               trashed: { $ne: true },

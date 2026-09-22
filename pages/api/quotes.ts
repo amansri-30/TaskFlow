@@ -3,7 +3,7 @@ import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
 
 const getQuote = catchAsyncError(async (req: NextApiRequest, res: NextApiResponse) => {
-  if (req.method !== "GET") return handleRes(res, 400, false, "Only GET requests are allowed");
+  if (req.method !== "GET") return handleRes(res, 405, false, "Only GET requests are allowed");
 
   const apiKey = process.env.QUOTES_API_KEY;
   if (!apiKey) return handleRes(res, 500, false, "Quotes API key not configured");

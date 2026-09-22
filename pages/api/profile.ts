@@ -6,7 +6,7 @@ import isAuthenticated from "@/middleware/isAuthenticated";
 
 const Profile = catchAsyncError(async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "GET") {
-        return handleRes(res, 400, false, "Only GET request is allowed");
+        return handleRes(res, 405, false, "Only GET request is allowed");
     }
 
     await connectDB();

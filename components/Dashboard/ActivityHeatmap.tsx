@@ -93,18 +93,20 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
   }
 
   const monthCells: { col: number; label: string }[] = [];
-  let previousMonth: number | null = null;
   for (let w = 0; w < WEEKS; w++) {
-    const colDate = addDays(gridStart, w * 7);
     if (w === 0) {
-      monthCells.push({ col: 0, label: SHORT_MONTHS[colDate.getMonth()] });
-      previousMonth = colDate.getMonth();
-    } else if (colDate.getMonth() !== previousMonth) {
-      monthCells.push({
-        col: w,
-        label: SHORT_MONTHS[colDate.getMonth()],
-      });
-      previousMonth = colDate.getMonth();
+      monthCells.push({ col: 0, label: SHORT_MONTHS[gridStart.getMonth()] });
+      continue;
+    }
+    // A month's label belongs in the column that actually contains that
+    // month's 1st day — keying off the column's Monday skips months that
+    // start mid-week (e.g. Jul 1 Thu driving the label to the next week).
+    for (let d = 0; d < 7; d++) {
+      const date = addDays(gridStart, w * 7 + d);
+      if (date.getDate() === 1) {
+        monthCells.push({ col: w, label: SHORT_MONTHS[date.getMonth()] });
+        break;
+      }
     }
   }
 

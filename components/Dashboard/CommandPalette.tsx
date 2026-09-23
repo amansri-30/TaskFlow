@@ -82,6 +82,7 @@ export default function CommandPalette({
             const haystack = [
               t.title,
               t.description || "",
+              t.notes || "",
               t.list || "",
               t.priority || "",
               ...(t.tags || []),

@@ -1,4 +1,5 @@
 "use client";
+import React, { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -45,6 +46,7 @@ const FormSchema = z.object({
     .trim()
     .min(2, { message: "Task Title must be at least 2 characters." }),
   description: z.string().optional().default(""),
+  notes: z.string().optional().default(""),
   dueDate: z.date().optional(),
   list: z.string().default(""),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
@@ -66,6 +68,7 @@ export function AddTaskInlineModal({
     defaultValues: {
       taskTitle: "",
       description: "",
+      notes: "",
       dueDate: undefined,
       list: "default",
       priority: "medium",
@@ -78,11 +81,14 @@ export function AddTaskInlineModal({
   const listOptions = Array.from(
     new Set([...listNames.map((item) => item.name), ...customLists])
   );
+  const [submitting, setSubmitting] = useState(false);
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
+    if (submitting) return;
     const formData = {
       taskTitle: data.taskTitle,
       description: data.description,
+      notes: data.notes || "",
       dueDate: data.dueDate ?? null,
       list: data.list,
       priority: data.priority,
@@ -96,6 +102,7 @@ export function AddTaskInlineModal({
           : undefined,
     };
 
+    setSubmitting(true);
     try {
       const response = await axios.post("/api/newtask", formData);
       toast.success(response.data.message);
@@ -105,6 +112,8 @@ export function AddTaskInlineModal({
       const message =
         error?.response?.data?.message || error?.message || "Failed to add task";
       toast.error(message);
+    } finally {
+      setSubmitting(false);
     }
   }
   
@@ -151,6 +160,22 @@ export function AddTaskInlineModal({
                   placeholder="Description"
                   maxLength={100}
                   className="resize-none ring-inset rounded-tl-none rounded-tr-none border-dashed"
+                  {...field}
+                />
+              </FormControl>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="notes"
+          render={({ field }) => (
+            <FormItem>
+              <FormControl>
+                <Textarea
+                  placeholder="Notes (optional)"
+                  maxLength={4000}
+                  className="resize-none ring-inset mt-2"
                   {...field}
                 />
               </FormControl>
@@ -304,7 +329,9 @@ export function AddTaskInlineModal({
           >
             Cancel
           </Button>
-          <Button type="submit">Done</Button>
+          <Button type="submit" disabled={submitting}>
+            {submitting ? "Adding..." : "Done"}
+          </Button>
         </div>
       </div>
     </form>

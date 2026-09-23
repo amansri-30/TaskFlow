@@ -11,6 +11,11 @@ const TaskSchema = new mongoose.Schema({
     default: "",
     maxLength: [100, "Description cannot exceed 100 Characters"],
   },
+  notes: {
+    type: String,
+    default: "",
+    maxLength: [4000, "Notes cannot exceed 4000 characters"],
+  },
   list: {
     type: String,
     default: "default",

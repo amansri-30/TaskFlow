@@ -13,7 +13,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned } = req.body;
+    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned } = req.body;
 
     if (!taskTitle || !String(taskTitle).trim())
       return handleRes(res, 400, false, "Task Title is required");
@@ -50,6 +50,7 @@ const newTask = catchAsyncError(
     await Task.create({
       title: normalizedTitle,
       description: description || "",
+      notes: typeof notes === "string" ? notes.slice(0, 4000) : "",
       user: user._id,
       scheduledAt: dueDate,
       list,

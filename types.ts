@@ -29,6 +29,7 @@ export type Task = {
   _id?: string;
   title: string;
   description?: string;
+  notes?: string;
   list: string;
   priority?: "low" | "medium" | "high";
   date?: string;

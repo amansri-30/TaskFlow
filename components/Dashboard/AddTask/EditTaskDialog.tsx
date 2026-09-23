@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Popover,
@@ -47,6 +48,7 @@ export function EditTaskDialogContent({
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || "");
+  const [notes, setNotes] = useState(task.notes || "");
   const [list, setList] = useState(task.list);
   const [priority, setPriority] = useState<string>(task.priority || "medium");
   const [recurrence, setRecurrence] = useState<Recurrence>(
@@ -81,6 +83,7 @@ export function EditTaskDialogContent({
       await axios.put(`/api/task/${task.id}`, {
         taskTitle: title,
         description,
+        notes,
         list,
         priority,
         dueDate: selectedDate ? selectedDate.toISOString() : null,
@@ -130,6 +133,20 @@ export function EditTaskDialogContent({
             onChange={(e) => setDescription(e.target.value)}
             maxLength={100}
             className="line-clamp-3 ring-inset"
+          />
+        </div>
+
+        <div className="items-center gap-4">
+          <Label htmlFor="notes" className="pl-1 text-right">
+            Notes
+          </Label>
+          <Textarea
+            id="notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            maxLength={4000}
+            placeholder="Optional — add context, links, or a checklist"
+            className="mt-1 resize-none"
           />
         </div>
 

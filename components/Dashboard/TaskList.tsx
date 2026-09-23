@@ -34,8 +34,9 @@ import {
   Copy,
   Pin,
   TimerReset,
+  StickyNote,
 } from "lucide-react";
-import { isSameDay, startOfDay, isBefore, addDays } from "date-fns";
+import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
 import { normalizeTags } from "@/lib/tags";
 
@@ -355,10 +356,13 @@ export default function TaskList({
   const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
 
   const weekStart = startOfDay(addDays(new Date(), -6));
+  const now = new Date();
   const completedThisWeek = tasks.filter((t) => {
     if (!t.completed || !t.completedAt) return false;
     const d = new Date(t.completedAt);
-    return !isNaN(d.getTime()) && !isBefore(d, weekStart);
+    // Bound above too: a future-dated completedAt (fast client clock or a
+    // reimported backup) must not inflate the ongoing-week tally.
+    return !isNaN(d.getTime()) && !isBefore(d, weekStart) && !isAfter(d, now);
   }).length;
 
   useEffect(() => {
@@ -438,7 +442,8 @@ export default function TaskList({
     if (!term) return true;
     return (
       t.title.toLowerCase().includes(term) ||
-      (t.description || "").toLowerCase().includes(term)
+      (t.description || "").toLowerCase().includes(term) ||
+      (t.notes || "").toLowerCase().includes(term)
     );
   });
 
@@ -446,7 +451,8 @@ export default function TaskList({
     ? trashed.filter((t) =>
         term
           ? t.title.toLowerCase().includes(term) ||
-            (t.description || "").toLowerCase().includes(term)
+            (t.description || "").toLowerCase().includes(term) ||
+            (t.notes || "").toLowerCase().includes(term)
           : true
       )
     : [];
@@ -540,8 +546,6 @@ export default function TaskList({
     : FILTERS.find((f) => f.value === filter)?.label ?? "All";
   const heading = trashView
     ? "Trash"
-    : total === 0
-    ? "All Tasks"
     : `${activeFilterLabel} Tasks`;
 
   const handleToggleComplete = async (task: Task, value: boolean) => {
@@ -569,11 +573,18 @@ export default function TaskList({
         toast.success("Next occurrence scheduled");
       }
     } catch {
-      // Roll back only this task — restoring a whole-task snapshot could
-      // clobber concurrent updates from other handlers.
+      // Roll back only the fields this handler owns (completed/completedAt) —
+      // a whole-task snapshot would clobber a concurrent update (e.g. a pin
+      // or snooze issued from the command palette) on the same task.
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === task.id ? { ...previousTask } : t
+          t.id === task.id
+            ? {
+                ...t,
+                completed: previousTask.completed,
+                completedAt: previousTask.completedAt,
+              }
+            : t
         )
       );
       toast.error("Failed to update task");
@@ -590,7 +601,9 @@ export default function TaskList({
       await axios.patch(`/api/task/${task.id}`, { pinned: next });
     } catch {
       setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? { ...previousTask } : t))
+        prev.map((t) =>
+          t.id === task.id ? { ...t, pinned: previousTask.pinned } : t
+        )
       );
       toast.error("Failed to update pin");
     }
@@ -619,7 +632,11 @@ export default function TaskList({
       }
     } catch {
       setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? { ...previousTask } : t))
+        prev.map((t) =>
+          t.id === task.id
+            ? { ...t, scheduledAt: previousTask.scheduledAt }
+            : t
+        )
       );
       toast.error("Failed to snooze task");
     } finally {
@@ -674,10 +691,12 @@ export default function TaskList({
   type ImportPayload = {
     taskTitle: string;
     description: string;
+    notes?: string;
     dueDate: string | null;
     list: string;
     priority: string;
     recurrence: Recurrence;
+    monthlyDay?: number | null;
     tags: string[];
     completed?: boolean;
     completedAt?: string | null;
@@ -706,11 +725,19 @@ export default function TaskList({
       typeof item.description === "string" && item.description.trim()
         ? item.description.trim().slice(0, 100)
         : "";
+    const notes =
+      typeof item.notes === "string" && item.notes.trim()
+        ? item.notes.trim().slice(0, 4000)
+        : "";
     const recurrence: Recurrence = isRecurrence(item.recurrence)
       ? item.recurrence
       : isRecurrence(item.repeat)
       ? item.repeat
       : "none";
+    let monthlyDay: number | null = null;
+    if (Number.isInteger(item.monthlyDay) && item.monthlyDay >= 1 && item.monthlyDay <= 31) {
+      monthlyDay = item.monthlyDay;
+    }
     // Preserve lifecycle fields on a reimport so a backup round-trip doesn't
     // resurrect completed/pinned work as brand-new open tasks.
     let completedAt: string | null = null;
@@ -723,10 +750,12 @@ export default function TaskList({
     return {
       taskTitle: title,
       description,
+      notes,
       dueDate,
       list,
       priority,
       recurrence,
+      monthlyDay,
       tags: normalizeTags(item.tags),
       completed: item.completed === true,
       completedAt: item.completed === true ? completedAt : null,
@@ -870,12 +899,14 @@ export default function TaskList({
   const duplicatePayload = (task: Task) => ({
     taskTitle: `${task.title} (copy)`,
     description: task.description || "",
+    notes: task.notes || "",
     dueDate: task.scheduledAt || null,
     list: task.list,
     priority: task.priority || "medium",
     recurrence: task.recurrence || "none",
     tags: task.tags || [],
     monthlyDay: task.recurrence === "monthly" ? task.monthlyDay : undefined,
+    pinned: task.pinned === true,
   });
 
   const handleDuplicateTask = async (task: Task) => {
@@ -970,10 +1001,7 @@ export default function TaskList({
     <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
       <CommandPalette
         open={paletteOpen}
-        onClose={() => {
-          setPaletteOpen(false);
-          resetSelection();
-        }}
+        onClose={() => setPaletteOpen(false)}
         tasks={tasks}
         onToggleComplete={handleToggleComplete}
         onTogglePin={handleTogglePin}
@@ -1583,8 +1611,10 @@ function TaskItem({
   onRefresh: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
 
   return (
+    <>
     <div
       className={`flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group ${
         selected
@@ -1640,6 +1670,20 @@ function TaskItem({
             }`}
           >
             <TimerReset className="h-4 w-4" />
+          </button>
+        )}
+        {task.notes && (
+          <button
+            aria-label={notesOpen ? `Hide notes for ${task.title}` : `Show notes for ${task.title}`}
+            title={notesOpen ? "Hide notes" : "Show notes"}
+            onClick={() => setNotesOpen((v) => !v)}
+            className={`p-1 rounded ${
+              notesOpen
+                ? "text-sky-600 hover:bg-sky-50 dark:hover:bg-sky-950"
+                : "hover:bg-muted"
+            }`}
+          >
+            <StickyNote className="h-4 w-4" />
           </button>
         )}
         {(task.tags || []).slice(0, 3).map((tag) => (
@@ -1707,6 +1751,12 @@ function TaskItem({
         </Dialog>
       </div>
     </div>
+    {task.notes && notesOpen && (
+      <div className="ml-9 mb-1 border-l-2 border-sky-200 dark:border-sky-900 pl-3 text-sm text-muted-foreground whitespace-pre-wrap break-words">
+        {task.notes}
+      </div>
+    )}
+    </>
   );
 }
 

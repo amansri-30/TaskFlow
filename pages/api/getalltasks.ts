@@ -31,6 +31,12 @@ const getAllTasks = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     recurrence: t.recurrence,
     monthlyDay: t.monthlyDay,
     tags: t.tags || [],
+    subtasks: (t.subtasks || []).map((s: any) => ({
+      id: s._id ? s._id.toString() : s.id,
+      text: s.text,
+      completed: !!s.completed,
+      createdAt: s.createdAt,
+    })),
     pinned: t.pinned,
     trashed: t.trashed,
     trashedAt: t.trashedAt,

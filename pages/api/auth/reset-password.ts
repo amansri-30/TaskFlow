@@ -38,6 +38,7 @@ const resetPassword = catchAsyncError(
     user.password = await bcrypt.hash(password, 10);
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
+    user.passwordChangedAt = new Date();
     await user.save();
 
     handleRes(res, 200, true, "Password reset successfully. You can now log in.");

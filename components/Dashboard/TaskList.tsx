@@ -13,10 +13,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "../ui/button";
+import { Input } from "@/components/ui/input";
 
 import axios from "axios";
 import toast from "react-hot-toast";
-import { Task } from "@/types";
+import { Task, Subtask } from "@/types";
 import {
   Trash2,
   CheckCircle2,
@@ -35,6 +36,7 @@ import {
   Pin,
   TimerReset,
   StickyNote,
+  X,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
@@ -110,6 +112,20 @@ export default function TaskList({
   const [batchActionNonce, setBatchActionNonce] = useState(0);
   const [snoozingId, setSnoozingId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const pendingRef = useRef<Set<string>>(new Set());
+  const [pendingOps, setPendingOps] = useState<Set<string>>(new Set());
+  const beginOp = (id: string) => {
+    // Synchronous (ref-based) guard: two rapid clicks on the same checkbox
+    // must never fire two PATCHes before the first reply lands.
+    if (pendingRef.current.has(id)) return false;
+    pendingRef.current.add(id);
+    setPendingOps(new Set(pendingRef.current));
+    return true;
+  };
+  const endOp = (id: string) => {
+    pendingRef.current.delete(id);
+    setPendingOps(new Set(pendingRef.current));
+  };
   const customLists = useCustomLists();
 
   const resetSelection = () => setSelectedIds(new Set());
@@ -549,6 +565,7 @@ export default function TaskList({
     : `${activeFilterLabel} Tasks`;
 
   const handleToggleComplete = async (task: Task, value: boolean) => {
+    if (!beginOp(task.id)) return;
     const previousTask = tasks.find((t) => t.id === task.id) ?? task;
     setTasks((prev) =>
       prev.map((t) =>
@@ -566,16 +583,24 @@ export default function TaskList({
         completed: value,
       });
       const nextTask = response.data?.nextTask as Task | null | undefined;
+      const removedNextTaskIds = response.data?.removedNextTaskIds as
+        | string[]
+        | undefined;
       if (value && nextTask) {
         setTasks((prev) =>
           prev.some((t) => t.id === nextTask.id) ? prev : [...prev, nextTask]
         );
         toast.success("Next occurrence scheduled");
+      } else if (removedNextTaskIds && removedNextTaskIds.length > 0) {
+        // Undoing a completion removes the pending occurrence this task
+        // spawned; drop it from the local list too so no phantom remains.
+        const removed = new Set(removedNextTaskIds);
+        setTasks((prev) => prev.filter((t) => !removed.has(t.id)));
       }
     } catch {
       // Roll back only the fields this handler owns (completed/completedAt) —
       // a whole-task snapshot would clobber a concurrent update (e.g. a pin
-      // or snooze issued from the command palette) on the same task.
+      // or subtask edit) on the same task.
       setTasks((prev) =>
         prev.map((t) =>
           t.id === task.id
@@ -588,10 +613,13 @@ export default function TaskList({
         )
       );
       toast.error("Failed to update task");
+    } finally {
+      endOp(task.id);
     }
   };
 
   const handleTogglePin = async (task: Task) => {
+    if (!beginOp(task.id)) return;
     const next = !task.pinned;
     const previousTask = tasks.find((t) => t.id === task.id) ?? task;
     setTasks((prev) =>
@@ -606,6 +634,8 @@ export default function TaskList({
         )
       );
       toast.error("Failed to update pin");
+    } finally {
+      endOp(task.id);
     }
   };
 
@@ -644,11 +674,42 @@ export default function TaskList({
     }
   };
 
+  const handleSubtasks = async (task: Task, subtasks: Subtask[]) => {
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
+    if (!beginOp(task.id)) return;
+    setTasks((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, subtasks } : t))
+    );
+    try {
+      await axios.put(`/api/task/${task.id}`, { subtasks });
+    } catch {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id
+            ? { ...t, subtasks: previousTask.subtasks || [] }
+            : t
+        )
+      );
+      toast.error("Failed to update subtasks");
+    } finally {
+      endOp(task.id);
+    }
+  };
+
   const refreshSilently = useCallback(async () => {
     try {
       const response = await axios.get("/api/getalltasks");
-      setTasks(response.data.tasks || []);
-      setTrashed(response.data.trashed || []);
+      const freshTasks = response.data.tasks || [];
+      const freshTrashed = response.data.trashed || [];
+      setTasks(freshTasks);
+      setTrashed(freshTrashed);
+      // Re-sync the batch selection against the freshly fetched id set so the
+      // "N selected" counter can never reference tasks that no longer exist.
+      setSelectedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const live = new Set(freshTasks.map((t: Task) => t.id));
+        return new Set(Array.from(prev).filter((id) => live.has(id)));
+      });
     } catch {
       // ignore — next explicit refresh will surface errors
     }
@@ -665,6 +726,8 @@ export default function TaskList({
         ...prev,
       ]);
       setLastDeleted(task);
+      // Keep the batch counter honest: prune the id we just deleted.
+      setSelectedIds((prev) => new Set(Array.from(prev).filter((id) => id !== task.id)));
       toast.success("Task moved to trash");
     } catch {
       setTasks((prev) =>
@@ -698,9 +761,31 @@ export default function TaskList({
     recurrence: Recurrence;
     monthlyDay?: number | null;
     tags: string[];
+    subtasks?: Subtask[];
     completed?: boolean;
     completedAt?: string | null;
     pinned?: boolean;
+    trashed?: boolean;
+    trashedAt?: string | null;
+  };
+
+  const normalizeImportedSubtasks = (raw: unknown): Subtask[] => {
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<string>();
+    const out: Subtask[] = [];
+    for (const s of raw as any[]) {
+      const text = typeof s?.text === "string" ? s.text.trim().slice(0, 200) : "";
+      if (!text || seen.has(text.toLowerCase())) continue;
+      seen.add(text.toLowerCase());
+      out.push({
+        id: s?.id || `${Date.now()}-${out.length}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        completed: s?.completed === true,
+        createdAt: s?.createdAt,
+      });
+      if (out.length >= 100) break;
+    }
+    return out;
   };
 
   const normalizeImportedTask = (item: any): ImportPayload | null => {
@@ -747,6 +832,17 @@ export default function TaskList({
         completedAt = new Date(rawCompletedAt).toISOString();
       }
     }
+    const subtasks = normalizeImportedSubtasks(item.subtasks);
+    // A backup taken from the Trash view must land back in the Trash, not as a
+    // fresh active duplicate. Guard the date: an invalid trashedAt would throw
+    // on toISOString() and abort the whole import.
+    let importedTrashedAt: string | null = null;
+    if (item.trashed === true) {
+      const rawTrashedAt = item.trashedAt;
+      if (rawTrashedAt && !isNaN(new Date(rawTrashedAt).getTime())) {
+        importedTrashedAt = new Date(rawTrashedAt).toISOString();
+      }
+    }
     return {
       taskTitle: title,
       description,
@@ -757,9 +853,12 @@ export default function TaskList({
       recurrence,
       monthlyDay,
       tags: normalizeTags(item.tags),
+      subtasks,
       completed: item.completed === true,
       completedAt: item.completed === true ? completedAt : null,
       pinned: item.pinned === true,
+      trashed: item.trashed === true,
+      trashedAt: importedTrashedAt,
     };
   };
 
@@ -905,6 +1004,7 @@ export default function TaskList({
     priority: task.priority || "medium",
     recurrence: task.recurrence || "none",
     tags: task.tags || [],
+    subtasks: (task.subtasks || []).map((s) => ({ ...s })),
     monthlyDay: task.recurrence === "monthly" ? task.monthlyDay : undefined,
     pinned: task.pinned === true,
   });
@@ -1406,7 +1506,7 @@ export default function TaskList({
               size="sm"
               variant="outline"
               onClick={handleExport}
-              disabled={filtered.length === 0}
+              disabled={(trashView ? trashedFiltered : filtered).length === 0}
             >
               <Download className="mr-1.5 h-4 w-4" />
               Export
@@ -1486,10 +1586,12 @@ export default function TaskList({
                   onSelect={handleSelect}
                   onToggle={handleToggleComplete}
                   onTogglePin={handleTogglePin}
+                  busy={pendingOps.has(task.id)}
                   onSnooze={handleSnooze}
                   snoozing={snoozingId === task.id}
                   onDelete={handleDelete}
                   onDuplicate={handleDuplicateTask}
+                  onSubtasks={handleSubtasks}
                   onRefresh={refresh}
                 />
               ))
@@ -1521,10 +1623,12 @@ export default function TaskList({
                     onSelect={handleSelect}
                     onToggle={handleToggleComplete}
                     onTogglePin={handleTogglePin}
+                    busy={pendingOps.has(task.id)}
                     onSnooze={handleSnooze}
                     snoozing={snoozingId === task.id}
                     onDelete={handleDelete}
                     onDuplicate={handleDuplicateTask}
+                    onSubtasks={handleSubtasks}
                     onRefresh={refresh}
                   />
                 ))}
@@ -1589,6 +1693,7 @@ function TaskItem({
   task,
   edit,
   selected,
+  busy,
   onSelect,
   onToggle,
   onTogglePin,
@@ -1596,11 +1701,13 @@ function TaskItem({
   snoozing,
   onDelete,
   onDuplicate,
+  onSubtasks,
   onRefresh,
 }: {
   task: Task;
   edit: boolean;
   selected: boolean;
+  busy: boolean;
   onSelect: (id: string) => void;
   onToggle: (task: Task, value: boolean) => void;
   onTogglePin: (task: Task) => void;
@@ -1608,10 +1715,45 @@ function TaskItem({
   snoozing: boolean;
   onDelete: (task: Task) => void;
   onDuplicate: (task: Task) => void;
+  onSubtasks: (task: Task, subtasks: Subtask[]) => void;
   onRefresh: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const [newSubtask, setNewSubtask] = useState("");
+
+  const subtasks = task.subtasks || [];
+  const subtaskDone = subtasks.filter((s) => s.completed).length;
+
+  const toggleSubtask = (id: string, completed: boolean) => {
+    onSubtasks(
+      task,
+      subtasks.map((s) => (s.id === id ? { ...s, completed } : s))
+    );
+  };
+  const removeSubtask = (id: string) => {
+    onSubtasks(task, subtasks.filter((s) => s.id !== id));
+  };
+  const addSubtask = () => {
+    const text = newSubtask.trim().slice(0, 200);
+    if (!text) return;
+    onSubtasks(task, [
+      ...subtasks,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        completed: false,
+      },
+    ]);
+    setNewSubtask("");
+  };
+  const addSubtaskKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addSubtask();
+    }
+  };
 
   return (
     <>
@@ -1629,6 +1771,7 @@ function TaskItem({
           onCheckedChange={(v) =>
             edit ? onSelect(task.id) : onToggle(task, v === true)
           }
+          disabled={!edit && busy}
           aria-label={
             edit ? `Select ${task.title}` : `Mark ${task.title} as done`
           }
@@ -1686,6 +1829,18 @@ function TaskItem({
             <StickyNote className="h-4 w-4" />
           </button>
         )}
+        <button
+          aria-label={subtasksOpen ? `Hide subtasks for ${task.title}` : `Show subtasks for ${task.title}`}
+          title={subtasksOpen ? "Hide subtasks" : "Subtasks / checklist"}
+          onClick={() => setSubtasksOpen((v) => !v)}
+          className={`p-1 rounded ${
+            subtasksOpen
+              ? "text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+              : "hover:bg-muted"
+          }`}
+        >
+          <ListChecks className="h-4 w-4" />
+        </button>
         {(task.tags || []).slice(0, 3).map((tag) => (
           <TagChip key={tag} tag={tag} />
         ))}
@@ -1754,6 +1909,61 @@ function TaskItem({
     {task.notes && notesOpen && (
       <div className="ml-9 mb-1 border-l-2 border-sky-200 dark:border-sky-900 pl-3 text-sm text-muted-foreground whitespace-pre-wrap break-words">
         {task.notes}
+      </div>
+    )}
+    {subtasksOpen && (
+      <div className="ml-9 mb-1 border-l-2 border-emerald-200 dark:border-emerald-900 pl-3">
+        <div className="flex items-center justify-between py-1">
+          <span className="text-xs font-medium text-muted-foreground">
+            Subtasks ({subtaskDone}/{subtasks.length})
+          </span>
+        </div>
+        {subtasks.map((s) => (
+          <div key={s.id} className="flex items-center gap-2 py-0.5 group/sub">
+            <Checkbox
+              checked={s.completed}
+              disabled={busy}
+              onCheckedChange={(v) => toggleSubtask(s.id, v === true)}
+              aria-label={`Mark subtask "${s.text}" as ${s.completed ? "pending" : "done"}`}
+            />
+            <span
+              className={`flex-1 text-sm min-w-0 break-words ${
+                s.completed ? "line-through text-muted-foreground" : ""
+              }`}
+            >
+              {s.text}
+            </span>
+            <button
+              aria-label={`Remove subtask "${s.text}"`}
+              title="Remove subtask"
+              disabled={busy}
+              onClick={() => removeSubtask(s.id)}
+              className="rounded p-1 text-muted-foreground opacity-0 group-hover/sub:opacity-100 hover:bg-muted hover:text-red-600"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-2 py-1">
+          <Input
+            value={newSubtask}
+            onChange={(e) => setNewSubtask(e.target.value)}
+            onKeyDown={addSubtaskKeyDown}
+            disabled={busy}
+            placeholder="Add a subtask and press Enter"
+            maxLength={200}
+            className="h-7 text-sm ring-inset"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || !newSubtask.trim()}
+            onClick={addSubtask}
+          >
+            Add
+          </Button>
+        </div>
       </div>
     )}
     </>

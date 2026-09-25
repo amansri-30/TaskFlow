@@ -22,7 +22,14 @@ const forgotPassword = catchAsyncError(
     });
 
     if (!user) {
-      return handleRes(res, 404, false, "No account found with this email");
+      // Identical status + message to the success path so the endpoint cannot
+      // be used to enumerate which emails have accounts.
+      return handleRes(
+        res,
+        200,
+        true,
+        "If an account exists with this email, a reset link has been issued"
+      );
     }
 
     // Create a one-time reset token (hashed at rest) that expires in 60 minutes.

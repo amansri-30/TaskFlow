@@ -9,6 +9,7 @@ import {
   nextOccurrenceDate,
 } from "@/lib/recurrence";
 import { normalizeTags } from "@/lib/tags";
+import { normalizeSubtasks } from "@/lib/subtasks";
 
 const mapTask = (t: any) => ({
   id: t._id.toString(),
@@ -23,6 +24,12 @@ const mapTask = (t: any) => ({
   recurrence: t.recurrence,
   monthlyDay: t.monthlyDay,
   tags: t.tags || [],
+  subtasks: (t.subtasks || []).map((s: any) => ({
+    id: s._id ? s._id.toString() : s.id,
+    text: s.text,
+    completed: !!s.completed,
+    createdAt: s.createdAt,
+  })),
   pinned: t.pinned,
   trashed: t.trashed,
   trashedAt: t.trashedAt,
@@ -59,7 +66,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay } = req.body;
+      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay } = req.body;
       const validPriorities = ["low", "medium", "high"];
       if (priority && !validPriorities.includes(priority)) {
         return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
@@ -85,6 +92,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         setMonthlyDay(task, dueDate);
       }
       if (tags !== undefined) task.tags = normalizeTags(tags);
+      if (subtasks !== undefined) task.subtasks = normalizeSubtasks(subtasks);
       if (monthlyDay !== undefined) {
         if (recurrence === "monthly" && Number.isInteger(monthlyDay)) {
           task.monthlyDay = Math.min(31, Math.max(1, monthlyDay));
@@ -164,6 +172,26 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         await task.save();
 
         let nextTask: any = null;
+        let removedNextTaskIds: string[] = [];
+
+        // Undoing a completion of a recurring task: compensate the chain by
+        // removing the pending occurrence(s) this task spawned, so a quick
+        // complete→reopen doesn't leave a phantom future task behind.
+        if (!completed && task.recurrence && task.recurrence !== "none") {
+          const orphans = await Task.find({
+            user: task.user,
+            baseTaskId: task._id,
+            completed: false,
+            trashed: { $ne: true },
+          });
+          if (orphans.length > 0) {
+            removedNextTaskIds = orphans.map((o: any) => o._id.toString());
+            await Task.deleteMany({
+              _id: { $in: orphans.map((o: any) => o._id) },
+            });
+          }
+        }
+
         if (
           completed &&
           task.recurrence &&
@@ -204,7 +232,9 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                 scheduledAt: nextDue,
                 monthlyDay: task.monthlyDay,
                 tags: task.tags || [],
+                subtasks: task.subtasks || [],
                 pinned: task.pinned,
+                baseTaskId: task._id,
               });
             }
           }
@@ -213,6 +243,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         return handleRes(res, 200, true, "Task status updated", {
           task: mapTask(task),
           nextTask: nextTask ? mapTask(nextTask) : null,
+          removedNextTaskIds,
         });
       }
       return handleRes(res, 400, false, "Invalid completion status");

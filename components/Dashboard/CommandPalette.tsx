@@ -86,6 +86,7 @@ export default function CommandPalette({
               t.list || "",
               t.priority || "",
               ...(t.tags || []),
+              ...(t.subtasks || []).map((s) => s.text),
             ]
               .join(" ")
               .toLowerCase();

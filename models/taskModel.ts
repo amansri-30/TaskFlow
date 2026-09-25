@@ -34,6 +34,11 @@ const TaskSchema = new mongoose.Schema({
     required: true,
     ref: "User",
   },
+  baseTaskId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Task",
+    default: null,
+  },
   updatedAt: {
     type: Date,
     default: Date.now,
@@ -57,6 +62,16 @@ const TaskSchema = new mongoose.Schema({
   },
   tags: {
     type: [String],
+    default: () => [],
+  },
+  subtasks: {
+    type: [
+      {
+        text: { type: String, required: true, maxLength: 200 },
+        completed: { type: Boolean, default: false },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
     default: () => [],
   },
   monthlyDay: {

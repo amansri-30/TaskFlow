@@ -6,6 +6,7 @@ import { catchAsyncError } from "@/middleware/catchAsyncError";
 import isAuthenticated from "@/middleware/isAuthenticated";
 import { isRecurrence } from "@/lib/recurrence";
 import { normalizeTags } from "@/lib/tags";
+import { normalizeSubtasks } from "@/lib/subtasks";
 
 const newTask = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
@@ -13,7 +14,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned } = req.body;
+    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt } = req.body;
 
     if (!taskTitle || !String(taskTitle).trim())
       return handleRes(res, 400, false, "Task Title is required");
@@ -46,6 +47,16 @@ const newTask = catchAsyncError(
         : null);
 
     const normalizedCompleted = typeof completed === "boolean" ? completed : false;
+    // A backup exported from the Trash view re-imports into the Trash, so a
+    // restore never silently revives deleted work as active duplicates.
+    const importedTrashed = trashed === true;
+    const rawTrashedAt = importedTrashed && trashedAt ? new Date(trashedAt) : null;
+    const resolvedTrashedAt =
+      importedTrashed && rawTrashedAt && !isNaN(rawTrashedAt.getTime())
+        ? rawTrashedAt
+        : importedTrashed
+        ? new Date()
+        : null;
 
     await Task.create({
       title: normalizedTitle,
@@ -58,6 +69,7 @@ const newTask = catchAsyncError(
       recurrence: effectiveRecurrence,
       monthlyDay: resolvedMonthlyDay,
       tags: normalizeTags(tags),
+      subtasks: normalizeSubtasks(subtasks),
       completed: normalizedCompleted,
       completedAt:
         normalizedCompleted && completedAt
@@ -66,6 +78,8 @@ const newTask = catchAsyncError(
           ? new Date()
           : null,
       pinned: typeof pinned === "boolean" ? pinned : false,
+      trashed: importedTrashed,
+      trashedAt: resolvedTrashedAt,
     });
 
     handleRes(res, 200, true, "Task created successfully");

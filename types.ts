@@ -24,6 +24,13 @@ export type AnimationData = {
   layers: any[];
 };
 
+export type Subtask = {
+  id: string;
+  text: string;
+  completed: boolean;
+  createdAt?: string;
+};
+
 export type Task = {
   id: string;
   _id?: string;
@@ -39,6 +46,7 @@ export type Task = {
   recurrence?: Recurrence;
   monthlyDay?: number;
   tags?: string[];
+  subtasks?: Subtask[];
   pinned?: boolean;
   trashed?: boolean;
   trashedAt?: string | null;

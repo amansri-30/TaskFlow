@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Pin, CornerDownLeft, Check, CheckCheck } from "lucide-react";
 import { Task } from "@/types";
+import { reminderLabel } from "@/lib/reminders";
 
 const MAX_RESULTS = 20;
 
@@ -32,6 +33,9 @@ function taskMeta(t: Task): string {
     parts.push(new Date(t.scheduledAt).toLocaleDateString());
   }
   if (t.recurrence && t.recurrence !== "none") parts.push(t.recurrence);
+  if (t.remindAt && !isNaN(new Date(t.remindAt).getTime())) {
+    parts.push(`remind ${reminderLabel(t.remindAt)}`);
+  }
   if ((t.tags || []).length) {
     parts.push((t.tags || []).map((x) => `#${x}`).join(" "));
   }

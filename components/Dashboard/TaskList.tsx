@@ -36,10 +36,19 @@ import {
   Pin,
   TimerReset,
   StickyNote,
+  Bell,
+  BellRing,
   X,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
+import {
+  reminderLabel,
+  isReminderDue,
+  REMINDER_PRESETS,
+  resolveReminderAt,
+  type ReminderPresetId,
+} from "@/lib/reminders";
 import { normalizeTags } from "@/lib/tags";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
@@ -364,6 +373,123 @@ export default function TaskList({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const [remindersSupported, setRemindersSupported] = useState(false);
+
+  useEffect(() => {
+    setRemindersSupported(
+      typeof window !== "undefined" && "Notification" in window
+    );
+  }, []);
+
+  // Reminders are delivered by the browser, so a fired reminder is stamped
+  // server-side. The stamp is what makes delivery exactly-once: a scan finds
+  // due reminders, notifies, then PATCHes `reminderFired`, and any later poll
+  // (including one in a second tab) sees the stamp and stays quiet.
+  const notifyDueReminders = useCallback(async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const due = tasks.filter(
+      (t) => !t.completed && isReminderDue(t.remindAt, t.remindedAt)
+    );
+    for (const task of due) {
+      // Stamp first: if the user closes the tab mid-request the reminder is
+      // treated as delivered rather than re-firing on the next visit.
+      try {
+        await axios.patch(`/api/task/${task.id}`, { reminderFired: true });
+      } catch {
+        continue;
+      }
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id ? { ...t, remindedAt: new Date().toISOString() } : t
+        )
+      );
+      try {
+        const notification = new Notification(task.title, {
+          body: task.notes || task.description || "Task reminder",
+          tag: `taskflow-reminder-${task.id}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      } catch {
+        // Some browsers block the constructor; the stamp still prevents a
+        // flood of retries.
+      }
+    }
+  }, [tasks]);
+
+  useEffect(() => {
+    notifyDueReminders();
+    const interval = setInterval(notifyDueReminders, 30000);
+    // A laptop lid closing past a reminder would otherwise silently skip it
+    // until the next poll, so re-scan as soon as the tab is shown again.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") notifyDueReminders();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [notifyDueReminders]);
+
+  const requestReminderPermission = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      toast.error("This browser cannot show notifications");
+      return;
+    }
+    if (Notification.permission === "granted") {
+      toast.success("Reminders are already enabled");
+      return;
+    }
+    const result = await Notification.requestPermission();
+    if (result === "granted") {
+      toast.success("Reminders enabled");
+      notifyDueReminders();
+    } else {
+      toast.error("Notification permission denied");
+    }
+  };
+
+  const handleSetReminder = async (task: Task, remindAt: string | null) => {
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === task.id
+          ? { ...t, remindAt, remindedAt: null }
+          : t
+      )
+    );
+    try {
+      await axios.put(`/api/task/${task.id}`, { remindAt });
+      toast.success(
+        remindAt
+          ? `Reminder set for ${reminderLabel(remindAt)}`
+          : "Reminder cleared"
+      );
+    } catch {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? previousTask : t))
+      );
+      toast.error("Could not update reminder");
+    }
+  };
+
+  const handleDismissReminder = async (task: Task) => {
+    try {
+      await axios.put(`/api/task/${task.id}`, { remindAt: null });
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, remindAt: null } : t))
+      );
+      toast.success("Reminder dismissed");
+    } catch {
+      toast.error("Could not dismiss reminder");
+    }
+  };
+
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   const total = tasks.length;
@@ -619,7 +745,10 @@ export default function TaskList({
   };
 
   const handleTogglePin = async (task: Task) => {
-    if (!beginOp(task.id)) return;
+    if (!beginOp(task.id)) {
+      toast.error("Wait for the current update to finish");
+      return;
+    }
     const next = !task.pinned;
     const previousTask = tasks.find((t) => t.id === task.id) ?? task;
     setTasks((prev) =>
@@ -649,8 +778,13 @@ export default function TaskList({
       });
       const updated = response.data?.task as Task | null | undefined;
       if (updated) {
+        // Write only the field snooze owns. Spreading the whole server
+        // snapshot would drop a subtask edit that was saved while this
+        // request was in flight.
         setTasks((prev) =>
-          prev.map((t) => (t.id === task.id ? { ...updated } : t))
+          prev.map((t) =>
+            t.id === task.id ? { ...t, scheduledAt: updated.scheduledAt } : t
+          )
         );
         const rawDate = updated.scheduledAt;
         const next = rawDate ? new Date(rawDate) : new Date(NaN);
@@ -681,7 +815,16 @@ export default function TaskList({
       prev.map((t) => (t.id === task.id ? { ...t, subtasks } : t))
     );
     try {
-      await axios.put(`/api/task/${task.id}`, { subtasks });
+      const response = await axios.put(`/api/task/${task.id}`, { subtasks });
+      // Reconcile with the server's stored list: the API trims, dedupes
+      // (case-insensitively) and caps at 100 items, so the optimistic array
+      // can contain rows the server silently dropped.
+      const saved = response.data?.task?.subtasks as Subtask[] | undefined;
+      if (Array.isArray(saved)) {
+        setTasks((prev) =>
+          prev.map((t) => (t.id === task.id ? { ...t, subtasks: saved } : t))
+        );
+      }
     } catch {
       setTasks((prev) =>
         prev.map((t) =>
@@ -767,6 +910,7 @@ export default function TaskList({
     pinned?: boolean;
     trashed?: boolean;
     trashedAt?: string | null;
+    remindAt?: string | null;
   };
 
   const normalizeImportedSubtasks = (raw: unknown): Subtask[] => {
@@ -843,6 +987,13 @@ export default function TaskList({
         importedTrashedAt = new Date(rawTrashedAt).toISOString();
       }
     }
+    // A reminder is an absolute instant, so it round-trips as-is. Trashed
+    // tasks don't need one — the notification scan skips them anyway.
+    let remindAt: string | null = null;
+    if (item.remindAt && item.trashed !== true) {
+      const d = new Date(item.remindAt);
+      if (!isNaN(d.getTime())) remindAt = d.toISOString();
+    }
     return {
       taskTitle: title,
       description,
@@ -859,6 +1010,7 @@ export default function TaskList({
       pinned: item.pinned === true,
       trashed: item.trashed === true,
       trashedAt: importedTrashedAt,
+      remindAt,
     };
   };
 
@@ -881,8 +1033,12 @@ export default function TaskList({
         toast.error("The file contains no tasks");
         return;
       }
-      if (items.length > 500) {
-        toast.error("Too many tasks (max 500 per import)");
+      if (items.length > 2000) {
+        // Every task is created by its own POST, so this cap is only a guard
+        // against a pathological file. It must stay above the number of tasks
+        // a user can realistically export, or the app would reject its own
+        // backup and they could never restore it.
+        toast.error("Too many tasks (max 2000 per import)");
         return;
       }
       const payloads = items
@@ -968,6 +1124,12 @@ export default function TaskList({
     const previous = new Map(tasks.map((t) => [t.id, t]));
     const ids = new Set(done.map((t) => t.id));
     setTasks((prev) => prev.filter((t) => !ids.has(t.id)));
+    // Prune the cleared ids from the batch selection too — otherwise the
+    // toolbar keeps counting tasks that no longer exist, and batch Delete
+    // would open a confirm dialog that silently does nothing.
+    setSelectedIds((prev) =>
+      new Set(Array.from(prev).filter((id) => !ids.has(id)))
+    );
     const results = await Promise.allSettled(
       done.map((t) => axios.delete(`/api/task/${t.id}`))
     );
@@ -1007,6 +1169,12 @@ export default function TaskList({
     subtasks: (task.subtasks || []).map((s) => ({ ...s })),
     monthlyDay: task.recurrence === "monthly" ? task.monthlyDay : undefined,
     pinned: task.pinned === true,
+    // Carry the reminder, but only while it is still in the future — a copy
+    // should not pop a notification for a moment that has already passed.
+    remindAt:
+      task.remindAt && new Date(task.remindAt).getTime() > Date.now()
+        ? task.remindAt
+        : null,
   });
 
   const handleDuplicateTask = async (task: Task) => {
@@ -1097,6 +1265,44 @@ export default function TaskList({
     toast.success("Trash emptied");
   };
 
+  // Backups are taken from whichever list is on screen, so the same control
+  // pair has to render in the Trash view too — it used to live only inside the
+  // main toolbar, which the ternary never reached, making Trash unbackable.
+  const importExportControls = (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        aria-label="Import tasks from JSON"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleImportFile(file);
+          e.target.value = "";
+        }}
+      />
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => fileInputRef.current?.click()}
+        disabled={importing}
+      >
+        <Upload className="mr-1.5 h-4 w-4" />
+        {importing ? "Importing..." : "Import"}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleExport}
+        disabled={(trashView ? trashedFiltered : filtered).length === 0}
+      >
+        <Download className="mr-1.5 h-4 w-4" />
+        Export
+      </Button>
+    </>
+  );
+
   return (
     <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
       <CommandPalette
@@ -1152,16 +1358,19 @@ export default function TaskList({
               Tasks here were moved to trash. Restore them to keep them, or
               delete them permanently.
             </p>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={handleEmptyTrash}
-              disabled={trashed.length === 0}
-            >
-              <Trash2 className="mr-1.5 h-4 w-4" />
-              Empty trash
-              <span className="ml-1 text-muted-foreground">({trashed.length})</span>
-            </Button>
+            <div className="flex items-center gap-2">
+              {importExportControls}
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleEmptyTrash}
+                disabled={trashed.length === 0}
+              >
+                <Trash2 className="mr-1.5 h-4 w-4" />
+                Empty trash
+                <span className="ml-1 text-muted-foreground">({trashed.length})</span>
+              </Button>
+            </div>
           </div>
 
           {trashedFiltered.length > 0 ? (
@@ -1481,36 +1690,7 @@ export default function TaskList({
                 Undo delete
               </Button>
             ) : null}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              aria-label="Import tasks from JSON"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleImportFile(file);
-                e.target.value = "";
-              }}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={importing}
-            >
-              <Upload className="mr-1.5 h-4 w-4" />
-              {importing ? "Importing..." : "Import"}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleExport}
-              disabled={(trashView ? trashedFiltered : filtered).length === 0}
-            >
-              <Download className="mr-1.5 h-4 w-4" />
-              Export
-            </Button>
+            {importExportControls}
             <span className="ml-auto text-xs text-muted-foreground">
               {filtered.length} shown
             </span>
@@ -1593,6 +1773,10 @@ export default function TaskList({
                   onDuplicate={handleDuplicateTask}
                   onSubtasks={handleSubtasks}
                   onRefresh={refresh}
+                  onSetReminder={handleSetReminder}
+                  onDismissReminder={handleDismissReminder}
+                  onEnableReminders={requestReminderPermission}
+                  remindersSupported={remindersSupported}
                 />
               ))
             ) : (
@@ -1630,6 +1814,10 @@ export default function TaskList({
                     onDuplicate={handleDuplicateTask}
                     onSubtasks={handleSubtasks}
                     onRefresh={refresh}
+                    onSetReminder={handleSetReminder}
+                    onDismissReminder={handleDismissReminder}
+                    onEnableReminders={requestReminderPermission}
+                    remindersSupported={remindersSupported}
                   />
                 ))}
               </div>
@@ -1703,6 +1891,10 @@ function TaskItem({
   onDuplicate,
   onSubtasks,
   onRefresh,
+  onSetReminder,
+  onDismissReminder,
+  onEnableReminders,
+  remindersSupported,
 }: {
   task: Task;
   edit: boolean;
@@ -1717,11 +1909,39 @@ function TaskItem({
   onDuplicate: (task: Task) => void;
   onSubtasks: (task: Task, subtasks: Subtask[]) => void;
   onRefresh: () => void;
+  onSetReminder: (task: Task, remindAt: string | null) => void;
+  onDismissReminder: (task: Task) => void;
+  onEnableReminders: () => void;
+  remindersSupported: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
   const [newSubtask, setNewSubtask] = useState("");
+
+  const reminderDue = isReminderDue(task.remindAt, task.remindedAt);
+  // The ring stays on once a reminder has fired until it is dismissed —
+  // keying it off `reminderDue` alone would make the "already notified" state
+  // invisible the instant the notification appeared.
+  const reminderRinging = reminderDue || !!(task.remindAt && task.remindedAt);
+
+  const applyReminderPreset = (preset: string) => {
+    if (preset === "none") {
+      setReminderOpen(false);
+      onDismissReminder(task);
+      return;
+    }
+    const when = resolveReminderAt(preset, task.scheduledAt);
+    if (!when) return;
+    if (when.getTime() <= Date.now()) {
+      // Never silently drop a preset: the user is told why and picks another.
+      toast.error("That reminder time is already in the past");
+      return;
+    }
+    onSetReminder(task, when.toISOString());
+    setReminderOpen(false);
+  };
 
   const subtasks = task.subtasks || [];
   const subtaskDone = subtasks.filter((s) => s.completed).length;
@@ -1794,7 +2014,8 @@ function TaskItem({
           aria-label={task.pinned ? `Unpin ${task.title}` : `Pin ${task.title}`}
           title={task.pinned ? "Unpin task" : "Pin task"}
           onClick={() => onTogglePin(task)}
-          className={`p-1 rounded ${
+          disabled={busy}
+          className={`p-1 rounded disabled:opacity-50 disabled:cursor-not-allowed ${
             task.pinned
               ? "text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950"
               : "hover:bg-muted"
@@ -1806,8 +2027,8 @@ function TaskItem({
           <button
             aria-label={`Snooze ${task.title}`}
             title="Snooze to next occurrence (stays incomplete)"
-            onClick={() => onSnooze(task)}
-            disabled={snoozing}
+          onClick={() => onSnooze(task)}
+          disabled={snoozing || busy}
             className={`p-1 hover:bg-muted rounded ${
               snoozing ? "opacity-50 cursor-not-allowed" : ""
             }`}
@@ -1848,6 +2069,13 @@ function TaskItem({
           <PriorityChip priority={task.priority} completed={!!task.completed} />
         )}
         {task.scheduledAt && <DueLabel task={task} />}
+        {task.remindAt && (
+          <ReminderChip
+            remindAt={task.remindAt}
+            due={reminderDue}
+            onDismiss={() => onDismissReminder(task)}
+          />
+        )}
         {task.recurrence && task.recurrence !== "none" && (
           <RecurrenceLabel recurrence={task.recurrence} />
         )}
@@ -1858,6 +2086,89 @@ function TaskItem({
             </button>
           </DialogTrigger>
           <EditTaskDialogContent task={task} onSaved={onRefresh} />
+        </Dialog>
+        <Dialog open={reminderOpen} onOpenChange={setReminderOpen}>
+          <DialogTrigger asChild>
+            <button
+              aria-label={
+                task.remindAt
+                  ? `Change reminder for ${task.title}`
+                  : `Set reminder for ${task.title}`
+              }
+              title={task.remindAt ? "Change reminder" : "Set reminder"}
+              onClick={() => {
+                if (remindersSupported && Notification.permission === "default") {
+                  // Ask on the first deliberate click, not on page load.
+                  onEnableReminders();
+                }
+                setReminderOpen(true);
+              }}
+              className={`p-1 rounded ${
+                task.remindAt
+                  ? "text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950"
+                  : "hover:bg-muted"
+              }`}
+            >
+              {reminderRinging ? (
+                <BellRing className="h-4 w-4" />
+              ) : (
+                <Bell className="h-4 w-4" />
+              )}
+            </button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-[360px]">
+            <DialogHeader>
+              <DialogTitle>Reminder</DialogTitle>
+              <DialogDescription>
+                {task.scheduledAt
+                  ? "Reminders notify you in this browser while TaskFlow is open."
+                  : "Set a due date to use relative reminders, or pick a custom time."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-1">
+              {REMINDER_PRESETS.filter(
+                (p) => p.id !== "custom" && (p.id !== "at-time" || task.scheduledAt)
+              ).map((preset) => (
+                <button
+                  key={preset.id}
+                  onClick={() => applyReminderPreset(preset.id as ReminderPresetId)}
+                  disabled={preset.id !== "none" && !task.scheduledAt && preset.minutes != null}
+                  className="flex items-center justify-between rounded-md px-3 py-2 text-sm text-left hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span>{preset.label}</span>
+                  {task.remindAt && preset.id === "at-time" ? (
+                    <span className="text-xs text-muted-foreground">
+                      {reminderLabel(task.remindAt)}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+              <div className="mt-2 flex items-center gap-2">
+                <label
+                  htmlFor={`reminder-custom-${task.id}`}
+                  className="text-sm text-muted-foreground"
+                >
+                  Custom
+                </label>
+                <input
+                  id={`reminder-custom-${task.id}`}
+                  type="datetime-local"
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    const when = resolveReminderAt("custom", null, e.target.value);
+                    if (!when) return;
+                    if (when.getTime() <= Date.now()) {
+                      toast.error("That reminder time is already in the past");
+                      return;
+                    }
+                    onSetReminder(task, when.toISOString());
+                    setReminderOpen(false);
+                  }}
+                  className="flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                />
+              </div>
+            </div>
+          </DialogContent>
         </Dialog>
         <button
           aria-label={`Duplicate ${task.title}`}
@@ -1976,6 +2287,46 @@ function TagChip({ tag }: { tag: string }) {
   return (
     <span className="flex items-center gap-1 rounded-full border border-neutral-200 bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
       #{tag}
+    </span>
+  );
+}
+
+// --------------------------------------------------------------------------------------
+
+function ReminderChip({
+  remindAt,
+  due,
+  onDismiss,
+}: {
+  remindAt: string;
+  due: boolean;
+  onDismiss: () => void;
+}) {
+  const when = new Date(remindAt);
+  const title = isNaN(when.getTime())
+    ? "Reminder"
+    : `Reminds ${when.toLocaleString()}`;
+  return (
+    <span
+      className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${
+        due
+          ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+          : "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300"
+      }`}
+      title={title}
+    >
+      <Bell className="h-3 w-3" />
+      {reminderLabel(remindAt)}
+      <button
+        aria-label="Dismiss reminder"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDismiss();
+        }}
+        className="rounded-full p-0.5 hover:bg-black/10 dark:hover:bg-white/10"
+      >
+        <X className="h-3 w-3" />
+      </button>
     </span>
   );
 }

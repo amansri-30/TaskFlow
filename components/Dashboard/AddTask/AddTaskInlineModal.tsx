@@ -33,6 +33,7 @@ import {
 import { listNames } from "@/lib/Data";
 import { useCustomLists } from "@/lib/customLists";
 import { RECURRENCE_OPTIONS } from "@/lib/recurrence";
+import { REMINDER_PRESETS, resolveReminderAt } from "@/lib/reminders";
 import { normalizeTags } from "@/lib/tags";
 
 import ArrowDown05Icon from "@/public/svg/icons/ArrowDown05Icon";
@@ -52,6 +53,16 @@ const FormSchema = z.object({
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   recurrence: z.enum(["none", "daily", "weekly", "monthly"]).default("none"),
   tagsText: z.string().default(""),
+  reminder: z.enum([
+    "none",
+    "at-time",
+    "10m",
+    "1h",
+    "3h",
+    "tomorrow",
+    "custom",
+  ]).default("none"),
+  remindAt: z.string().optional(),
 });
 
 type AddTaskInlineModalProps = {
@@ -74,6 +85,8 @@ export function AddTaskInlineModal({
       priority: "medium",
       recurrence: "none",
       tagsText: "",
+      reminder: "none",
+      remindAt: "",
     },
   });
 
@@ -85,6 +98,21 @@ export function AddTaskInlineModal({
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
     if (submitting) return;
+    const reminderAt = resolveReminderAt(
+      data.reminder,
+      data.dueDate ? data.dueDate.toISOString() : null,
+      data.remindAt || null
+    );
+    // A relative reminder with no due date resolves against "now", which would
+    // already be in the past and pop a notification on the next poll. Drop it
+    // and say why instead of creating something the user never asked for.
+    const remindAt =
+      reminderAt && reminderAt.getTime() > Date.now()
+        ? reminderAt.toISOString()
+        : null;
+    if (reminderAt && !remindAt) {
+      toast.error("Reminder time is in the past — task added without it");
+    }
     const formData = {
       taskTitle: data.taskTitle,
       description: data.description,
@@ -100,6 +128,7 @@ export function AddTaskInlineModal({
         data.recurrence === "monthly" && data.dueDate
           ? data.dueDate.getDate()
           : undefined,
+      remindAt,
     };
 
     setSubmitting(true);
@@ -318,6 +347,47 @@ export function AddTaskInlineModal({
                   ))}
                 </SelectContent>
               </Select>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="reminder"
+          render={({ field }) => (
+            <FormItem>
+              <Select
+                onValueChange={field.onChange}
+                value={field.value}
+              >
+                <FormControl>
+                  <SelectTrigger className="ring-inset lg:min-w-[220px] lg:max-w-full xl:min-w-[300px]">
+                    <SelectValue placeholder="Reminder" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {REMINDER_PRESETS.map((preset) => (
+                    <SelectItem key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="remindAt"
+          render={({ field }) => (
+            <FormItem
+              className={form.watch("reminder") === "custom" ? "" : "hidden"}
+            >
+              <Input
+                type="datetime-local"
+                value={field.value ?? ""}
+                onChange={field.onChange}
+                aria-label="Custom reminder time"
+              />
             </FormItem>
           )}
         />

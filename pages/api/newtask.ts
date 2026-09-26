@@ -14,7 +14,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt } = req.body;
+    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt, remindAt } = req.body;
 
     if (!taskTitle || !String(taskTitle).trim())
       return handleRes(res, 400, false, "Task Title is required");
@@ -58,12 +58,17 @@ const newTask = catchAsyncError(
         ? new Date()
         : null;
 
+    const rawReminder = remindAt ? new Date(remindAt) : null;
+    const resolvedRemindAt =
+      rawReminder && !isNaN(rawReminder.getTime()) ? rawReminder : null;
+
     await Task.create({
       title: normalizedTitle,
       description: description || "",
       notes: typeof notes === "string" ? notes.slice(0, 4000) : "",
       user: user._id,
       scheduledAt: dueDate,
+      remindAt: resolvedRemindAt,
       list,
       priority: priority || "medium",
       recurrence: effectiveRecurrence,

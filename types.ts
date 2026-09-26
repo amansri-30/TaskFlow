@@ -41,6 +41,8 @@ export type Task = {
   priority?: "low" | "medium" | "high";
   date?: string;
   scheduledAt?: string;
+  remindAt?: string | null;
+  remindedAt?: string | null;
   completed?: boolean;
   completedAt?: string | null;
   recurrence?: Recurrence;

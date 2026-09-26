@@ -33,11 +33,20 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import axios from "axios";
 import toast from "react-hot-toast";
-import { Repeat } from "lucide-react";
+import { Bell, Repeat } from "lucide-react";
 
 import SearchList02Icon from "@/public/svg/icons/SearchList02Icon";
 import Calendar02Icon from "@/public/svg/icons/Calendar02Icon";
 import CalendarUpload01Icon from "@/public/svg/icons/CalendarUpload01Icon";
+
+// `datetime-local` speaks local wall-clock time, not UTC, so the stored instant
+// has to be shifted before it can be shown in an input.
+function toLocalInputValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 
 export function EditTaskDialogContent({
   task,
@@ -61,6 +70,15 @@ export function EditTaskDialogContent({
     const d = new Date(raw);
     return isNaN(d.getTime()) ? undefined : d;
   });
+  // Frozen at mount so the save can tell "user edited the reminder" from
+  // "user opened the dialog and hit save".
+  const [initialRemindAt] = useState(() => {
+    if (!task.remindAt) return "";
+    const d = new Date(task.remindAt);
+    // datetime-local needs a local, second-precision value.
+    return isNaN(d.getTime()) ? "" : toLocalInputValue(d);
+  });
+  const [remindAt, setRemindAt] = useState(initialRemindAt);
   const [isSaving, setIsSaving] = useState(false);
   const customLists = useCustomLists();
   const listOptions = Array.from(
@@ -93,6 +111,15 @@ export function EditTaskDialogContent({
           recurrence === "monthly" && selectedDate
             ? selectedDate.getDate()
             : undefined,
+        // Absent key = "leave the reminder alone"; only send it when the field
+        // was actually edited, so opening the dialog can't clear a reminder.
+        ...(remindAt !== initialRemindAt
+          ? {
+              remindAt: remindAt
+                ? new Date(remindAt).toISOString()
+                : null,
+            }
+          : {}),
       });
       toast.success("Task updated successfully");
       onSaved?.();
@@ -273,6 +300,32 @@ export function EditTaskDialogContent({
               )}
             </PopoverContent>
           </Popover>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="flex justify-center items-center gap-1">
+            <Bell className="h-4 w-4" />
+            <Label htmlFor="remindAt" className="text-right">
+              Reminder
+            </Label>
+          </div>
+          <Input
+            id="remindAt"
+            type="datetime-local"
+            value={remindAt}
+            onChange={(e) => setRemindAt(e.target.value)}
+            className="min-w-[200px]"
+          />
+          {remindAt && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setRemindAt("")}
+            >
+              Clear
+            </Button>
+          )}
         </div>
       </div>
 

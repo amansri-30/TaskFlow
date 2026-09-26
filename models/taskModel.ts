@@ -47,6 +47,14 @@ const TaskSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  remindAt: {
+    type: Date,
+    default: null,
+  },
+  remindedAt: {
+    type: Date,
+    default: null,
+  },
   completed: {
     type: Boolean,
     default: false,

@@ -32,6 +32,21 @@ const forgotPassword = catchAsyncError(
       );
     }
 
+    // No email transport is wired up in this deployment, so the reset token
+    // itself is the only delivery channel. Handing it back in the response
+    // would let anyone POST any email address and take over that account, so
+    // the token is minted ONLY when explicitly opted in for local/demo use.
+    // With no token issued we answer exactly like the unknown-email case.
+    const exposeToken = process.env.TASKFLOW_EXPOSE_RESET_TOKEN === "true";
+    if (!exposeToken) {
+      return handleRes(
+        res,
+        200,
+        true,
+        "If an account exists with this email, a reset link has been sent"
+      );
+    }
+
     // Create a one-time reset token (hashed at rest) that expires in 60 minutes.
     const resetToken = crypto.randomBytes(32).toString("hex");
     const hashedToken = crypto
@@ -43,10 +58,16 @@ const forgotPassword = catchAsyncError(
     user.resetPasswordExpire = new Date(Date.now() + 60 * 60 * 1000);
     await user.save();
 
-    handleRes(res, 200, true, "Password reset link sent", {
-      resetToken,
-      expiresInMinutes: 60,
-    });
+    handleRes(
+      res,
+      200,
+      true,
+      "If an account exists with this email, a reset link has been sent",
+      {
+        resetToken,
+        expiresInMinutes: 60,
+      }
+    );
   }
 );
 

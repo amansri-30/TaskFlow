@@ -19,6 +19,8 @@ const mapTask = (t: any) => ({
   list: t.list,
   priority: t.priority,
   scheduledAt: t.scheduledAt,
+  remindAt: t.remindAt,
+  remindedAt: t.remindedAt,
   completed: t.completed,
   completedAt: t.completedAt,
   recurrence: t.recurrence,
@@ -66,7 +68,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay } = req.body;
+      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay, remindAt } = req.body;
       const validPriorities = ["low", "medium", "high"];
       if (priority && !validPriorities.includes(priority)) {
         return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
@@ -93,6 +95,16 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
       }
       if (tags !== undefined) task.tags = normalizeTags(tags);
       if (subtasks !== undefined) task.subtasks = normalizeSubtasks(subtasks);
+      if (remindAt !== undefined) {
+        const reminder = remindAt ? new Date(remindAt) : null;
+        if (reminder && isNaN(reminder.getTime())) {
+          return handleRes(res, 400, false, "Invalid reminder date");
+        }
+        task.remindAt = reminder;
+        // Any edit to the reminder re-arms it, so clearing remindedAt here is
+        // what stops a stale "already fired" stamp from muting the new time.
+        task.remindedAt = null;
+      }
       if (monthlyDay !== undefined) {
         if (recurrence === "monthly" && Number.isInteger(monthlyDay)) {
           task.monthlyDay = Math.min(31, Math.max(1, monthlyDay));
@@ -106,7 +118,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, snooze } = req.body;
+      const { completed, restore, pinned, priority, list, snooze, reminderFired } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -114,6 +126,18 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task restored", { task: mapTask(task) });
+      }
+
+      if (reminderFired === true) {
+        // Acknowledges a fired reminder so it can't notify again on every
+        // poll. Clearing the reminder itself is a PUT, not a PATCH, so the
+        // scheduled time survives until the user edits it.
+        task.remindedAt = new Date();
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Reminder acknowledged", {
+          task: mapTask(task),
+        });
       }
 
       if (snooze === true) {
@@ -207,20 +231,30 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             scheduled && scheduled.getTime() > now.getTime() ? scheduled : now;
           const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
           if (nextDue) {
-            // Guard against duplicate next occurrences created for the SAME chain.
-            // Scope by list so two independent tasks that merely share a title
-            // (same recurrence landing on the same date) don't silently kill
-            // each other's recurrence chain.
+            // Guard against a duplicate occurrence for the SAME chain only.
+            // Dedupe on baseTaskId (the chain this task belongs to), never on
+            // title+list: two independent tasks that merely share a title
+            // would otherwise kill each other's recurrence — and the orphan
+            // cleanup above would then delete the other chain's occurrence.
             const existing = await Task.findOne({
               user: task.user,
-              title: task.title,
-              list: task.list,
-              recurrence: task.recurrence,
+              baseTaskId: task._id,
               scheduledAt: nextDue,
               trashed: { $ne: true },
-              _id: { $ne: task._id },
             });
             if (!existing) {
+              // Carry the reminder onto the next occurrence, but only when the
+              // gap between reminder and due date still holds — a reminder
+              // that would land in the past is dropped rather than firing
+              // instantly on a task nobody has seen yet.
+              const reminder = task.remindAt instanceof Date ? task.remindAt : null;
+              const leadMs = reminder && task.scheduledAt instanceof Date
+                ? task.scheduledAt.getTime() - reminder.getTime()
+                : 0;
+              const nextRemindAt =
+                reminder && leadMs > 0
+                  ? new Date(nextDue.getTime() - leadMs)
+                  : null;
               nextTask = await Task.create({
                 title: task.title,
                 description: task.description,
@@ -230,6 +264,8 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                 user: task.user,
                 recurrence: task.recurrence,
                 scheduledAt: nextDue,
+                remindAt: nextRemindAt,
+                remindedAt: null,
                 monthlyDay: task.monthlyDay,
                 tags: task.tags || [],
                 subtasks: task.subtasks || [],

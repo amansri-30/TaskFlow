@@ -22,8 +22,8 @@ import axios from "axios";
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [alertShown, setAlertShown] = useState(false);
-  const [noAccount, setNoAccount] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(null);
+  const [mailOnly, setMailOnly] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -33,18 +33,22 @@ export default function ForgotPassword() {
       const response = await axios.post("/api/auth/forgot-password", {
         email: email.trim(),
       });
-      setNoAccount(false);
-      setResetToken(response.data?.resetToken ?? null);
-      toast.success("Reset token generated successfully");
+      const token = response.data?.resetToken ?? null;
+      setResetToken(token);
+      // A deployed build has no mail transport wired up, so the API never
+      // hands the token back — it only confirms a request was accepted. Show
+      // the same neutral confirmation in both cases.
+      setMailOnly(!token);
+      toast.success(
+        token
+          ? "Reset token generated successfully"
+          : "If an account exists with this email, a reset link has been sent"
+      );
       setAlertShown(true);
     } catch (error: any) {
       setResetToken(null);
-      if (error?.response?.status === 404) {
-        setNoAccount(true);
-        toast.error("No account found with this email");
-      } else {
-        toast.error(error?.response?.data?.message || "Something went wrong. Please try again.");
-      }
+      setMailOnly(false);
+      toast.error(error?.response?.data?.message || "Something went wrong. Please try again.");
       setAlertShown(true);
     } finally {
       setSubmitting(false);
@@ -90,19 +94,17 @@ export default function ForgotPassword() {
             <AlertBox
               alertShown={alertShown}
               title={
-                noAccount
-                  ? "No Account Found"
-                  : "Reset Token Generated"
+                mailOnly ? "Check your inbox" : "Reset Token Generated"
               }
               description={
-                noAccount
-                  ? "We could not find an account with the email you entered. Please check the email and try again."
+                mailOnly
+                  ? "If an account exists with that email, a reset link is on its way. This deployment has no email service configured, so a link cannot be delivered here — an administrator can enable token display for local testing."
                   : "No email service is configured, so your one-time token is shown here (valid for 60 minutes). Use it on the Reset Password page."
               }
               icon={<InformationCircleIcon />}
             />
           )}
-          {resetToken && !noAccount && (
+          {resetToken && !mailOnly && (
             <div className="mt-4 grid gap-3">
               <div>
                 <Label className="mb-1 block pl-1 text-left">

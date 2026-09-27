@@ -50,6 +50,25 @@ const setMonthlyDay = (task: any, dateValue: unknown) => {
     d && !isNaN(d.getTime()) ? d.getDate() : task.monthlyDay ?? null;
 };
 
+/**
+ * Move a task's due date while keeping its reminder the same distance ahead of
+ * it. A reminder that would land in the past is dropped rather than kept,
+ * because the 30s client poll would fire it instantly.
+ */
+const moveDueDate = (task: any, nextDue: Date | null) => {
+  const previousDue = task.scheduledAt instanceof Date ? task.scheduledAt : null;
+  task.scheduledAt = nextDue;
+  if (task.remindAt instanceof Date && nextDue) {
+    const leadMs = previousDue ? previousDue.getTime() - task.remindAt.getTime() : 0;
+    if (leadMs > 0) {
+      const shifted = new Date(nextDue.getTime() - leadMs);
+      task.remindAt = shifted.getTime() > Date.now() ? shifted : null;
+    }
+  }
+  // Re-arm: an acknowledged reminder must not suppress the newly moved time.
+  task.remindedAt = null;
+};
+
 const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResponse) => {
   await connectDB();
 
@@ -86,11 +105,26 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
       if (notes !== undefined) task.notes = String(notes).slice(0, 4000);
       if (list !== undefined) task.list = list;
       if (priority !== undefined) task.priority = priority;
-      if (dueDate !== undefined) task.scheduledAt = dueDate || null;
+      if (dueDate !== undefined) {
+        if (dueDate) {
+          const parsed = new Date(dueDate);
+          if (isNaN(parsed.getTime())) {
+            return handleRes(res, 400, false, "Invalid due date");
+          }
+          moveDueDate(task, parsed);
+        } else {
+          moveDueDate(task, null);
+        }
+      }
       if (recurrence !== undefined) {
         task.recurrence = recurrence;
         // When recurring monthly, capture the anchor day-of-month from the
         // newly chosen due date so future occurrences never drift.
+        setMonthlyDay(task, dueDate);
+      } else if (dueDate !== undefined && monthlyDay === undefined) {
+        // Re-anchor on a due-date-only edit too. Without this, dragging a
+        // monthly task from the 1st to the 15th left the old anchor behind and
+        // the next completion spawned the occurrence back on the 1st.
         setMonthlyDay(task, dueDate);
       }
       if (tags !== undefined) task.tags = normalizeTags(tags);
@@ -118,7 +152,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, snooze, reminderFired } = req.body;
+      const { completed, restore, pinned, priority, list, snooze, reminderFired, deferTo } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -154,10 +188,60 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         if (!nextDue) {
           return handleRes(res, 400, false, "Could not compute a next occurrence");
         }
-        task.scheduledAt = nextDue;
+        // Snoozing moves the due date, so the reminder has to move with it.
+        // Leaving it behind made the reminder fire immediately and, worse, left
+        // an ~8-day gap that the recurrence lead-time logic then propagated to
+        // every future occurrence. moveDueDate reads the OLD date, so the
+        // assignment must happen inside it, not before.
+        moveDueDate(task, nextDue);
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task snoozed until the next occurrence", {
+          task: mapTask(task),
+        });
+      }
+
+      // Reschedule: move a task's due date (or clear it). Applies to
+      // non-recurring tasks too, which is the point — snooze is recurring-only.
+      if (deferTo !== undefined) {
+        if (task.trashed) {
+          return handleRes(res, 400, false, "Restore the task before rescheduling it");
+        }
+        if (deferTo === null) {
+          moveDueDate(task, null);
+          task.monthlyDay = null;
+        } else {
+          const parsed = new Date(deferTo);
+          if (isNaN(parsed.getTime())) {
+            return handleRes(res, 400, false, "Invalid due date");
+          }
+          if (parsed.getTime() === (task.scheduledAt instanceof Date ? task.scheduledAt.getTime() : null)) {
+            return handleRes(res, 200, true, "Task already has that due date", {
+              task: mapTask(task),
+            });
+          }
+          moveDueDate(task, parsed);
+          // A moved monthly task must re-anchor, or the next completion spawns
+          // on the old day-of-month.
+          setMonthlyDay(task, parsed);
+          // A pending occurrence of a recurring chain still sits on the old
+          // date. Move it with the parent — including its reminder, so the
+          // lead time survives instead of drifting a week every defer.
+          const pending = await Task.find({
+            user: task.user,
+            baseTaskId: task._id,
+            completed: false,
+            trashed: { $ne: true },
+          });
+          for (const child of pending) {
+            moveDueDate(child, parsed);
+            child.updatedAt = new Date();
+            await child.save();
+          }
+        }
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task rescheduled", {
           task: mapTask(task),
         });
       }

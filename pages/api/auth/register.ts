@@ -13,6 +13,17 @@ const registerUser = catchAsyncError(
 
     const { name, email, password } = req.body;
     if (!name || !email || !password) return handleRes(res, 400, false, "All fields required!");
+    // Validate the plaintext password BEFORE hashing. The schema's minLength
+    // runs against the 60-character bcrypt digest, so it can never reject a
+    // short password — only this check actually enforces the policy.
+    if (typeof password !== "string" || password.length < 10) {
+      return handleRes(res, 400, false, "Password must be at least 10 characters");
+    }
+    if (String(password).length > 72) {
+      // bcrypt silently truncates beyond 72 bytes, so anything after that is
+      // discarded without the user knowing.
+      return handleRes(res, 400, false, "Password must be at most 72 characters");
+    }
     // Store the email normalized (trim + lowercase) so lookup is case-insensitive
     // everywhere — otherwise a mixed-case signup could be locked out.
     const normalizedEmail = String(email).trim().toLowerCase();

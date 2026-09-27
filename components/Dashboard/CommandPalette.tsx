@@ -9,7 +9,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Pin, CornerDownLeft, Check, CheckCheck } from "lucide-react";
+import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight } from "lucide-react";
 import { Task } from "@/types";
 import { reminderLabel } from "@/lib/reminders";
 
@@ -141,9 +141,24 @@ export default function CommandPalette({
             onKeyDown={onKeyDown}
             placeholder="Search tasks...  (try #tag, list:work, p:high)"
             className="border-0 shadow-none focus-visible:ring-0"
+            // Focus stays in this input, so the listbox needs explicit
+            // combobox wiring or a screen reader never announces which row the
+            // arrow keys are on.
+            role="combobox"
+            aria-expanded={results.length > 0}
+            aria-controls="command-palette-results"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              results[activeIndex] ? `command-palette-option-${results[activeIndex].id}` : undefined
+            }
           />
         </div>
-        <div className="max-h-[50vh] overflow-y-auto p-2" role="listbox">
+        <div
+          id="command-palette-results"
+          className="max-h-[50vh] overflow-y-auto p-2"
+          role="listbox"
+          aria-label="Task search results"
+        >
           {results.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
               No tasks match &ldquo;{query}&rdquo;
@@ -152,6 +167,7 @@ export default function CommandPalette({
             results.map((t, i) => (
               <div
                 key={t.id}
+                id={`command-palette-option-${t.id}`}
                 role="option"
                 aria-selected={i === activeIndex}
                 className={cn(
@@ -190,9 +206,10 @@ export default function CommandPalette({
                 >
                   <Pin className={cn("h-4 w-4", t.pinned && "fill-amber-500")} />
                 </button>
-                <div
-                  className="min-w-0 flex-1 cursor-pointer"
+                <button
+                  type="button"
                   onClick={() => openTask(t)}
+                  className="min-w-0 flex-1 text-left cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <p className="truncate text-sm font-medium">
                     {t.title}
@@ -205,7 +222,7 @@ export default function CommandPalette({
                       {taskMeta(t)}
                     </p>
                   )}
-                </div>
+                </button>
                 {t.completed && (
                   <Badge variant="secondary" className="shrink-0 text-[10px]">
                     done
@@ -231,7 +248,7 @@ export default function CommandPalette({
               <Pin className="h-3 w-3" /> pin
             </span>
             <span className="hidden items-center gap-1 sm:flex">
-              <CornerDownLeft className="h-3 w-3" /> jump
+              <ArrowRight className="h-3 w-3" /> tab to open
             </span>
           </span>
         </div>

@@ -38,9 +38,18 @@ import {
   StickyNote,
   Bell,
   BellRing,
+  CalendarClock,
   X,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
 import {
   reminderLabel,
@@ -50,6 +59,11 @@ import {
   type ReminderPresetId,
 } from "@/lib/reminders";
 import { normalizeTags } from "@/lib/tags";
+import {
+  DEFER_PRESETS,
+  resolveDeferPreset,
+  deferLabel,
+} from "@/lib/dueDates";
 
 import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
@@ -216,6 +230,20 @@ export default function TaskList({
       target.map((t) => axios.patch(`/api/task/${t.id}`, { completed: false }))
     );
     const failed = target.filter((_, i) => results[i].status === "rejected");
+    // Reopening a repeating task deletes the occurrence it spawned, and the
+    // server reports those ids. The batch path used to check only the promise
+    // status, so the deleted occurrences stayed rendered as phantom rows that
+    // 404'd on any action.
+    const removedIds = new Set<string>();
+    results.forEach((r) => {
+      if (r.status === "fulfilled") {
+        const ids = r.value?.data?.removedNextTaskIds as string[] | undefined;
+        if (Array.isArray(ids)) ids.forEach((id) => removedIds.add(id));
+      }
+    });
+    if (removedIds.size > 0) {
+      setTasks((prev) => prev.filter((t) => !removedIds.has(t.id)));
+    }
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
       setTasks((prev) =>
@@ -778,12 +806,20 @@ export default function TaskList({
       });
       const updated = response.data?.task as Task | null | undefined;
       if (updated) {
-        // Write only the field snooze owns. Spreading the whole server
+        // Write only the fields snooze owns. Spreading the whole server
         // snapshot would drop a subtask edit that was saved while this
-        // request was in flight.
+        // request was in flight. The reminder rides along because the server
+        // keeps its lead time relative to the new due date.
         setTasks((prev) =>
           prev.map((t) =>
-            t.id === task.id ? { ...t, scheduledAt: updated.scheduledAt } : t
+            t.id === task.id
+              ? {
+                  ...t,
+                  scheduledAt: updated.scheduledAt,
+                  remindAt: updated.remindAt ?? null,
+                  remindedAt: updated.remindedAt ?? null,
+                }
+              : t
           )
         );
         const rawDate = updated.scheduledAt;
@@ -798,7 +834,12 @@ export default function TaskList({
       setTasks((prev) =>
         prev.map((t) =>
           t.id === task.id
-            ? { ...t, scheduledAt: previousTask.scheduledAt }
+            ? {
+                ...t,
+                scheduledAt: previousTask.scheduledAt,
+                remindAt: previousTask.remindAt ?? null,
+                remindedAt: previousTask.remindedAt ?? null,
+              }
             : t
         )
       );
@@ -806,6 +847,88 @@ export default function TaskList({
     } finally {
       setSnoozingId(null);
     }
+  };
+
+  // Reschedule a single task. `null` clears the due date entirely.
+  const handleDefer = async (task: Task, dueIso: string | null) => {
+    if (!beginOp(task.id)) {
+      toast.error("Wait for the current update to finish");
+      return;
+    }
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === task.id
+          ? { ...t, scheduledAt: dueIso ?? undefined, remindedAt: null }
+          : t
+      )
+    );
+    try {
+      const response = await axios.patch(`/api/task/${task.id}`, {
+        deferTo: dueIso,
+      });
+      const updated = response.data?.task as Task | null | undefined;
+      if (updated) {
+        // Reconcile only what this action owns, per the same rule as snooze.
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  scheduledAt: updated.scheduledAt ?? undefined,
+                  monthlyDay: updated.monthlyDay,
+                  remindAt: updated.remindAt ?? null,
+                  remindedAt: updated.remindedAt ?? null,
+                }
+              : t
+          )
+        );
+      }
+      toast.success(dueIso ? `Moved to ${deferLabel(dueIso)}` : "Due date cleared");
+    } catch {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? previousTask : t))
+      );
+      toast.error("Failed to reschedule task");
+    } finally {
+      endOp(task.id);
+    }
+  };
+
+  const handleBatchDefer = async (dueIso: string | null) => {
+    if (selectedTasks.length === 0) return;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
+    const target = selectedTasks;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) =>
+      prev.map((t) =>
+        ids.has(t.id)
+          ? { ...t, scheduledAt: dueIso ?? undefined, remindedAt: null }
+          : t
+      )
+    );
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { deferTo: dueIso }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    if (failed.length > 0) {
+      // Roll back only the tasks that failed, then let the rest come from the
+      // server so reminder lead times are not guessed at on the client.
+      const failedIds = new Set(failed.map((t) => t.id));
+      setTasks((prev) =>
+        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
+      );
+      toast.error(
+        `Failed to reschedule ${failed.length} of ${target.length} tasks`
+      );
+      await refreshSilently();
+      return;
+    }
+    toast.success(
+      dueIso
+        ? `Moved ${target.length} task${target.length > 1 ? "s" : ""} to ${deferLabel(dueIso)}`
+        : `Cleared due date on ${target.length} task${target.length > 1 ? "s" : ""}`
+    );
   };
 
   const handleSubtasks = async (task: Task, subtasks: Subtask[]) => {
@@ -1621,6 +1744,40 @@ export default function TaskList({
                       </Select>
                     </div>
                   )}
+                  <div className="flex items-center gap-1.5">
+                    <CalendarClock className="h-4 w-4 text-muted-foreground" />
+                    <Select
+                      key={`defer-${batchActionNonce}`}
+                      onValueChange={(v) => {
+                        setBatchActionNonce((n) => n + 1);
+                        // A batch has many different due dates, so presets
+                        // resolve against today rather than any one task.
+                        if (v === "none") {
+                          handleBatchDefer(null);
+                          return;
+                        }
+                        const when = resolveDeferPreset(v, null);
+                        if (when) handleBatchDefer(when.toISOString());
+                      }}
+                    >
+                      <SelectTrigger
+                        className="h-8 min-w-[150px]"
+                        aria-label="Reschedule selected tasks"
+                      >
+                        <SelectValue placeholder="Reschedule" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEFER_PRESETS.filter((p) => p.id !== "none").map(
+                          (preset) => (
+                            <SelectItem key={preset.id} value={preset.id}>
+                              {preset.label}
+                            </SelectItem>
+                          )
+                        )}
+                        <SelectItem value="none">No due date</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Button
                     size="sm"
                     variant="destructive"
@@ -1776,6 +1933,7 @@ export default function TaskList({
                   onSetReminder={handleSetReminder}
                   onDismissReminder={handleDismissReminder}
                   onEnableReminders={requestReminderPermission}
+                  onDefer={handleDefer}
                   remindersSupported={remindersSupported}
                 />
               ))
@@ -1817,6 +1975,7 @@ export default function TaskList({
                     onSetReminder={handleSetReminder}
                     onDismissReminder={handleDismissReminder}
                     onEnableReminders={requestReminderPermission}
+                    onDefer={handleDefer}
                     remindersSupported={remindersSupported}
                   />
                 ))}
@@ -1894,6 +2053,7 @@ function TaskItem({
   onSetReminder,
   onDismissReminder,
   onEnableReminders,
+  onDefer,
   remindersSupported,
 }: {
   task: Task;
@@ -1912,12 +2072,14 @@ function TaskItem({
   onSetReminder: (task: Task, remindAt: string | null) => void;
   onDismissReminder: (task: Task) => void;
   onEnableReminders: () => void;
+  onDefer: (task: Task, dueIso: string | null) => void;
   remindersSupported: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
   const [reminderOpen, setReminderOpen] = useState(false);
+  const [deferPickerOpen, setDeferPickerOpen] = useState(false);
   const [newSubtask, setNewSubtask] = useState("");
 
   const reminderDue = isReminderDue(task.remindAt, task.remindedAt);
@@ -2027,8 +2189,8 @@ function TaskItem({
           <button
             aria-label={`Snooze ${task.title}`}
             title="Snooze to next occurrence (stays incomplete)"
-          onClick={() => onSnooze(task)}
-          disabled={snoozing || busy}
+            onClick={() => onSnooze(task)}
+            disabled={snoozing || busy}
             className={`p-1 hover:bg-muted rounded ${
               snoozing ? "opacity-50 cursor-not-allowed" : ""
             }`}
@@ -2036,6 +2198,90 @@ function TaskItem({
             <TimerReset className="h-4 w-4" />
           </button>
         )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              aria-label={`Reschedule ${task.title}`}
+              title="Reschedule or clear due date"
+              disabled={busy}
+              className={`p-1 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-muted ${
+                task.scheduledAt ? "" : "opacity-60"
+              }`}
+            >
+              <CalendarClock className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>Reschedule</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {DEFER_PRESETS.filter((p) => p.id !== "none").map((preset) => (
+              <DropdownMenuItem
+                key={preset.id}
+                onSelect={() =>
+                  onDefer(task, resolveDeferPreset(preset.id, task.scheduledAt)?.toISOString() ?? null)
+                }
+              >
+                {preset.label}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => onDefer(task, null)}
+              className={!task.scheduledAt ? "opacity-50" : ""}
+            >
+              No due date
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(e) => {
+                // Keep the menu open: selecting an item would otherwise
+                // unmount the date input before it can be used.
+                e.preventDefault();
+                setDeferPickerOpen(true);
+              }}
+            >
+              Pick a date...
+            </DropdownMenuItem>
+            {deferPickerOpen && (
+              <div
+                className="p-2"
+                onClick={(e) => e.stopPropagation()}
+                // Radix menus own the keyboard while open and would otherwise
+                // swallow the date typed here as menu typeahead.
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="date"
+                  aria-label={`New due date for ${task.title}`}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    // Build the local date by hand: `new Date("YYYY-MM-DD")`
+                    // parses as UTC and lands a day early west of Greenwich.
+                    const [y, m, d] = e.target.value.split("-").map(Number);
+                    if (!y || !m || !d) return;
+                    const base = task.scheduledAt
+                      ? new Date(task.scheduledAt)
+                      : new Date();
+                    const when = new Date(
+                      y,
+                      m - 1,
+                      d,
+                      isNaN(base.getTime()) ? 12 : base.getHours(),
+                      isNaN(base.getTime()) ? 0 : base.getMinutes()
+                    );
+                    if (when.getTime() <= Date.now()) {
+                      toast.error("Pick a date in the future");
+                      return;
+                    }
+                    onDefer(task, when.toISOString());
+                    setDeferPickerOpen(false);
+                  }}
+                />
+              </div>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
         {task.notes && (
           <button
             aria-label={notesOpen ? `Hide notes for ${task.title}` : `Show notes for ${task.title}`}

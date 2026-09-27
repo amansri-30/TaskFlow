@@ -17,7 +17,6 @@ import { Button } from "../ui/button";
 import { useAppDispatch, useAppSelector } from "@/hooks";
 import { logoutUser } from "@/redux/user/userSlice";
 import { Avatar, AvatarFallback } from "../ui/avatar";
-import CustomButton from "../elements/CustomButton";
 import GetQuotes from "@/middleware/getQuotes";
 import toast from "react-hot-toast";
 
@@ -113,12 +112,17 @@ export default function SearchAreaWithAvatarDropdown({
         <DropdownMenuContent align="end">
           <DropdownMenuLabel>My Account</DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem>
+          {/* asChild makes the anchor itself the menu item. Nesting an <a> or
+              <button> inside DropdownMenuItem left both mouse-only: the item
+              handles Enter/Space by activating itself, and a click dispatched
+              on the parent never reaches the child, so Logout could not be
+              reached from the keyboard at all. */}
+          <DropdownMenuItem asChild>
             <a href="/help">Support</a>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem>
-            <CustomButton onClick={handleLogout} className="w-full">Logout</CustomButton>
+          <DropdownMenuItem onSelect={handleLogout}>
+            Logout
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

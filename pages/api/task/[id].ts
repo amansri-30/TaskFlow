@@ -54,9 +54,21 @@ const setMonthlyDay = (task: any, dateValue: unknown) => {
  * Move a task's due date while keeping its reminder the same distance ahead of
  * it. A reminder that would land in the past is dropped rather than kept,
  * because the 30s client poll would fire it instantly.
+ *
+ * No-op when the date is unchanged. The Edit dialog always sends `dueDate`, so
+ * saving an unrelated field used to re-anchor the reminder here: a reminder
+ * whose lead had already elapsed was silently deleted, and a dateless task's
+ * `remindedAt` was cleared, which re-fired a notification the user had already
+ * acknowledged. Only a real move may re-arm.
  */
 const moveDueDate = (task: any, nextDue: Date | null) => {
   const previousDue = task.scheduledAt instanceof Date ? task.scheduledAt : null;
+  const unchanged =
+    previousDue === null
+      ? nextDue === null
+      : nextDue !== null && previousDue.getTime() === nextDue.getTime();
+  if (unchanged) return;
+
   task.scheduledAt = nextDue;
   if (task.remindAt instanceof Date && nextDue) {
     const leadMs = previousDue ? previousDue.getTime() - task.remindAt.getTime() : 0;
@@ -134,6 +146,13 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         if (reminder && isNaN(reminder.getTime())) {
           return handleRes(res, 400, false, "Invalid reminder date");
         }
+        // A reminder in the past fires on the very next poll. The inline add
+        // form, the row presets and the custom-time input all reject it; the
+        // Edit dialog's raw datetime-local field did not, so a stale value
+        // re-raised a notification the user had already dismissed.
+        if (reminder && reminder.getTime() <= Date.now()) {
+          return handleRes(res, 400, false, "Reminder must be in the future");
+        }
         task.remindAt = reminder;
         // Any edit to the reminder re-arms it, so clearing remindedAt here is
         // what stops a stale "already fired" stamp from muting the new time.
@@ -152,7 +171,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, snooze, reminderFired, deferTo } = req.body;
+      const { completed, restore, pinned, priority, list, snooze, reminderFired, deferTo, scannedRemindAt } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -166,11 +185,29 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // Acknowledges a fired reminder so it can't notify again on every
         // poll. Clearing the reminder itself is a PUT, not a PATCH, so the
         // scheduled time survives until the user edits it.
+        //
+        // Compare-and-set on the reminder time: the client sends the remindAt
+        // it actually scanned, and the stamp is skipped if the reminder moved
+        // meanwhile. The scan loop awaits one PATCH per task, so during a burst
+        // of simultaneous reminders a reschedule of a later task re-armed
+        // remindedAt = null and then had it overwritten by this write — the
+        // freshly moved reminder was muted permanently.
+        if (scannedRemindAt !== undefined) {
+          const current = task.remindAt instanceof Date ? task.remindAt.getTime() : null;
+          const scanned = scannedRemindAt ? new Date(scannedRemindAt).getTime() : null;
+          if (scanned === null || isNaN(scanned) || current !== scanned) {
+            return handleRes(res, 200, true, "Reminder changed, not acknowledged", {
+              task: mapTask(task),
+              acknowledged: false,
+            });
+          }
+        }
         task.remindedAt = new Date();
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Reminder acknowledged", {
           task: mapTask(task),
+          acknowledged: true,
         });
       }
 
@@ -235,6 +272,10 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           });
           for (const child of pending) {
             moveDueDate(child, parsed);
+            // Re-anchor the child too. Moving it to the 20th while it kept
+            // monthlyDay 15 made the next completion spawn back on the old
+            // day, so the chain reverted to the pre-move anchor.
+            setMonthlyDay(child, parsed);
             child.updatedAt = new Date();
             await child.save();
           }

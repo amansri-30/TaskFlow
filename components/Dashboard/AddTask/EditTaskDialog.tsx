@@ -96,6 +96,15 @@ export function EditTaskDialogContent({
       toast.error("Title is required");
       return;
     }
+    // A reminder that already passed fires on the next 30s poll, re-raising a
+    // notification the user has seen. The inline add form, the row presets and
+    // the custom-time picker all reject it; this raw datetime-local field did
+    // not. Checked before the request so the user gets the reason inline, and
+    // enforced again server-side in case the client guard is bypassed.
+    if (remindAt && new Date(remindAt).getTime() <= Date.now()) {
+      toast.error("Reminder must be in the future");
+      return;
+    }
     setIsSaving(true);
     try {
       await axios.put(`/api/task/${task.id}`, {

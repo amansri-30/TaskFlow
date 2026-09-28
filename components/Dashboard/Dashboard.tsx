@@ -10,6 +10,8 @@ export type TagStat = { name: string; count: number };
 export type TaskStats = {
   today: number;
   scheduled: number;
+  next7: number;
+  noDueDate: number;
   tags: TagStat[];
 };
 
@@ -18,6 +20,8 @@ export function Dashboard() {
   const [stats, setStats] = useState<TaskStats>({
     today: 0,
     scheduled: 0,
+    next7: 0,
+    noDueDate: 0,
     tags: [],
   });
   const [search, setSearch] = useState<string>("");

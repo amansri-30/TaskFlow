@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight } from "lucide-react";
 import { Task } from "@/types";
 import { reminderLabel } from "@/lib/reminders";
+import { deferLabel } from "@/lib/dueDates";
 
 const MAX_RESULTS = 20;
 
@@ -30,7 +31,9 @@ function taskMeta(t: Task): string {
   if (t.priority && t.priority !== "medium") parts.push(t.priority);
   if (t.list && t.list !== "default") parts.push(`list: ${t.list}`);
   if (t.scheduledAt && !isNaN(new Date(t.scheduledAt).getTime())) {
-    parts.push(new Date(t.scheduledAt).toLocaleDateString());
+    // Same compact, year-eliding format the defer menus and toasts use, so a
+    // date never reads one way in the palette and another in the list.
+    parts.push(deferLabel(t.scheduledAt));
   }
   if (t.recurrence && t.recurrence !== "none") parts.push(t.recurrence);
   if (t.remindAt && !isNaN(new Date(t.remindAt).getTime())) {

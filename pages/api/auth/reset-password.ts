@@ -3,6 +3,7 @@ import crypto from "crypto";
 import bcrypt from "bcrypt";
 import connectDB from "../../../lib/connectDB";
 import User from "@/models/userModel";
+import { passwordPolicyError } from "@/lib/passwordPolicy";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
 
@@ -15,9 +16,9 @@ const resetPassword = catchAsyncError(
     if (!token || typeof token !== "string" || !password) {
       return handleRes(res, 400, false, "Reset token and new password are required");
     }
-    if (typeof password !== "string" || password.length < 10) {
-      return handleRes(res, 400, false, "Password must be at least 10 characters");
-    }
+    // Shared with /api/auth/register so the two entry points cannot drift.
+    const policyError = passwordPolicyError(password);
+    if (policyError) return handleRes(res, 400, false, policyError);
 
     await connectDB();
 

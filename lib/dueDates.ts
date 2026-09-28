@@ -48,13 +48,20 @@ export function resolveDeferPreset(
       : new Date(currentDue)
     : null;
   const base = current && !isNaN(current.getTime()) ? current : new Date();
+  // A due date already in the past cannot anchor a *relative* preset. Measured
+  // from a task that was due two months ago, "in one month" is still a month
+  // overdue, and the guard below only nudges by a single day, so the task
+  // silently stayed overdue. Relative presets are therefore measured from the
+  // later of the due date and now, which is what the labels promise.
+  const anchor =
+    base.getTime() > Date.now() ? base : new Date();
   const keepTime = (date: Date) => {
-    date.setHours(base.getHours(), base.getMinutes(), 0, 0);
+    date.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
     return date;
   };
   const today = startOfDay(new Date());
-  // Never hand back a moment that has already passed: nudge a same-day
-  // resolution to the next day rather than locking the user out of a preset.
+  // Safety net for the same-day edge (e.g. "this weekend" resolving to today at
+  // an earlier hour): never hand back a moment that has already passed.
   const guard = (date: Date) => {
     if (date.getTime() <= new Date().getTime()) {
       const bumped = new Date(date);
@@ -66,7 +73,7 @@ export function resolveDeferPreset(
 
   switch (preset) {
     case "tomorrow":
-      return guard(keepTime(addDays(base, 1)));
+      return guard(keepTime(addDays(anchor, 1)));
     case "weekend": {
       // Saturday of the current week, but never a weekend day already gone.
       const saturday = addDays(startOfWeek(today, { weekStartsOn: 1 }), 5);
@@ -79,11 +86,11 @@ export function resolveDeferPreset(
       return guard(keepTime(monday));
     }
     case "two-weeks":
-      return guard(keepTime(addWeeks(base, 2)));
+      return guard(keepTime(addWeeks(anchor, 2)));
     case "one-month":
       // date-fns clamps Jan 31 + 1 month to Feb 28/29 rather than overflowing
       // into March, which is the behavior people expect from "in one month".
-      return guard(keepTime(addMonths(base, 1)));
+      return guard(keepTime(addMonths(anchor, 1)));
     default:
       return null;
   }

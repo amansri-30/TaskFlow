@@ -60,6 +60,14 @@ import {
 } from "@/lib/reminders";
 import { normalizeTags } from "@/lib/tags";
 import {
+  groupTasksByDue,
+  groupLabel,
+  hasDueDate,
+  isDueWithinDays,
+  SMART_FILTER_LABELS,
+  type DueGroup,
+} from "@/lib/dueGroups";
+import {
   DEFER_PRESETS,
   resolveDeferPreset,
   deferLabel,
@@ -104,6 +112,22 @@ const SORT_OPTIONS: { value: SortMode; label: string }[] = [
   { value: "title", label: "Title A–Z" },
 ];
 
+/**
+ * The exact field set a reschedule owns. Every defer path reconciles and rolls
+ * back with this and nothing else, so a concurrent update on the same row (a
+ * pin, a subtask tick, a tag edit) is never clobbered by another tab's stale
+ * snapshot. It is also the reason `scheduledAt` is normalised here: the server
+ * may return null for "no due date" while the row stores undefined.
+ */
+const dateFields = (t: Task) => ({
+  scheduledAt: t.scheduledAt ?? undefined,
+  monthlyDay: t.monthlyDay,
+  remindAt: t.remindAt ?? null,
+  remindedAt: t.remindedAt ?? null,
+});
+
+const GROUP_PREF_KEY = "taskflow:groupByDue";
+
 export default function TaskList({
   filter,
   onFilterChange,
@@ -127,6 +151,7 @@ export default function TaskList({
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
   const [sort, setSort] = useState<SortMode>("smart");
+  const [groupByDue, setGroupByDue] = useState<boolean>(false);
   const [importing, setImporting] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
@@ -351,6 +376,18 @@ export default function TaskList({
     });
   };
 
+  /** Select or clear every task in one date group, leaving other groups alone. */
+  const handleToggleGroup = (group: DueGroup) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = group.tasks.every((t) => next.has(t.id));
+      group.tasks.forEach((t) =>
+        allSelected ? next.delete(t.id) : next.add(t.id)
+      );
+      return next;
+    });
+  };
+
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -422,15 +459,51 @@ export default function TaskList({
     );
     for (const task of due) {
       // Stamp first: if the user closes the tab mid-request the reminder is
-      // treated as delivered rather than re-firing on the next visit.
+      // treated as delivered rather than re-firing on the next visit. The
+      // remindAt that was scanned travels with the request so the server can
+      // refuse to stamp a reminder that moved while this loop was awaiting an
+      // earlier task — otherwise a reschedule in that window was silently
+      // muted by the in-flight acknowledgement.
+      let acknowledged = false;
+      let serverTask: Task | null = null;
       try {
-        await axios.patch(`/api/task/${task.id}`, { reminderFired: true });
+        const response = await axios.patch(`/api/task/${task.id}`, {
+          reminderFired: true,
+          scannedRemindAt: task.remindAt,
+        });
+        acknowledged = response.data?.acknowledged === true;
+        serverTask = (response.data?.task as Task | undefined) ?? null;
       } catch {
+        continue;
+      }
+      if (!acknowledged) {
+        // The reminder was rescheduled mid-scan: adopt the server's copy so
+        // the next poll sees the new time instead of the stale one.
+        if (serverTask) {
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === task.id
+                ? {
+                    ...t,
+                    remindAt: serverTask!.remindAt ?? null,
+                    remindedAt: serverTask!.remindedAt ?? null,
+                    scheduledAt: serverTask!.scheduledAt ?? t.scheduledAt,
+                  }
+                : t
+            )
+          );
+        }
         continue;
       }
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === task.id ? { ...t, remindedAt: new Date().toISOString() } : t
+          t.id === task.id
+            ? {
+                ...t,
+                remindedAt:
+                  serverTask?.remindedAt ?? new Date().toISOString(),
+              }
+            : t
         )
       );
       try {
@@ -520,6 +593,24 @@ export default function TaskList({
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
+  // Restored after mount, not during the first render: reading localStorage in
+  // the initialiser would make the server-rendered markup disagree with the
+  // client and trip React's hydration check.
+  useEffect(() => {
+    try {
+      setGroupByDue(window.localStorage.getItem(GROUP_PREF_KEY) === "true");
+    } catch {
+      // Private mode or a blocked storage partition: keep the flat default.
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(GROUP_PREF_KEY, String(groupByDue));
+    } catch {
+      // Preference simply will not persist.
+    }
+  }, [groupByDue]);
+
   const total = tasks.length;
   const completedCount = tasks.filter((t) => t.completed).length;
   const pendingCount = total - completedCount;
@@ -555,7 +646,19 @@ export default function TaskList({
       name,
       count,
     })) as { name: string; count: number }[];
-    onStatsChange({ today: todayCount, scheduled: scheduledCount, tags });
+    // A local clock read rather than the render-scope `now`: that value is a
+    // new Date on every render, so depending on it would re-run this effect
+    // continuously.
+    const clock = new Date();
+    const next7Count = tasks.filter((t) => isDueWithinDays(t, clock)).length;
+    const noDueDateCount = tasks.filter((t) => !hasDueDate(t)).length;
+    onStatsChange({
+      today: todayCount,
+      scheduled: scheduledCount,
+      next7: next7Count,
+      noDueDate: noDueDateCount,
+      tags,
+    });
   }, [tasks, onStatsChange]);
 
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
@@ -595,6 +698,14 @@ export default function TaskList({
       const d = new Date(t.scheduledAt);
       return !isNaN(d.getTime()) && isBefore(d, today);
     }
+    // Smart views. Completed tasks are included exactly like "today" and
+    // "scheduled" already are, so the sidebar badge and the list never disagree
+    // — a badge counting only open tasks next to a list that also shows closed
+    // ones is a discrepancy users read as a bug.
+    if (filter === "next7") return isDueWithinDays(t, now);
+    // `hasDueDate` treats an unparseable date as no date, matching how the
+    // buckets below sort it.
+    if (filter === "nodate") return !hasDueDate(t);
     if (filter.startsWith("list:")) {
       return t.list === filter.slice("list:".length);
     }
@@ -679,8 +790,12 @@ export default function TaskList({
     return dueDiff;
   });
 
-  const handleExport = () => {
-    // Export what the user is actually looking at — in the Trash view that's
+  // Grouped view, derived from the already-sorted list so each bucket keeps
+  // the active sort. Recomputed every render on purpose: memoising on `tasks`
+  // would miss the rows removed by `removedNextTaskIds` during a batch reopen.
+  const dueGroups: DueGroup[] = groupTasksByDue(sortedIncomplete, now);
+
+  const handleExport = () => {    // Export what the user is actually looking at — in the Trash view that's
     // the trashed tasks, not the active list.
     const exported = trashView ? trashedFiltered : filtered;
     if (exported.length === 0) return;
@@ -713,7 +828,9 @@ export default function TaskList({
     ? `#${filter.slice("tag:".length)}`
     : filter.startsWith("priority:")
     ? `${filter.slice("priority:".length)} priority`
-    : FILTERS.find((f) => f.value === filter)?.label ?? "All";
+    : FILTERS.find((f) => f.value === filter)?.label ??
+    SMART_FILTER_LABELS[filter] ??
+    "All";
   const heading = trashView
     ? "Trash"
     : `${activeFilterLabel} Tasks`;
@@ -872,22 +989,19 @@ export default function TaskList({
         // Reconcile only what this action owns, per the same rule as snooze.
         setTasks((prev) =>
           prev.map((t) =>
-            t.id === task.id
-              ? {
-                  ...t,
-                  scheduledAt: updated.scheduledAt ?? undefined,
-                  monthlyDay: updated.monthlyDay,
-                  remindAt: updated.remindAt ?? null,
-                  remindedAt: updated.remindedAt ?? null,
-                }
-              : t
+            t.id === task.id ? { ...t, ...dateFields(updated) } : t
           )
         );
       }
       toast.success(dueIso ? `Moved to ${deferLabel(dueIso)}` : "Due date cleared");
     } catch {
+      // Field-scoped rollback: restoring the whole task would clobber a
+      // concurrent update on the same row (a pin, a subtask tick) and reinstate
+      // a stale remindedAt that re-fires an acknowledged notification.
       setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? previousTask : t))
+        prev.map((t) =>
+          t.id === task.id ? { ...t, ...dateFields(previousTask) } : t
+        )
       );
       toast.error("Failed to reschedule task");
     } finally {
@@ -910,25 +1024,46 @@ export default function TaskList({
     const results = await Promise.allSettled(
       target.map((t) => axios.patch(`/api/task/${t.id}`, { deferTo: dueIso }))
     );
-    const failed = target.filter((_, i) => results[i].status === "rejected");
-    if (failed.length > 0) {
-      // Roll back only the tasks that failed, then let the rest come from the
-      // server so reminder lead times are not guessed at on the client.
-      const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
-      toast.error(
-        `Failed to reschedule ${failed.length} of ${target.length} tasks`
-      );
-      await refreshSilently();
-      return;
-    }
-    toast.success(
-      dueIso
-        ? `Moved ${target.length} task${target.length > 1 ? "s" : ""} to ${deferLabel(dueIso)}`
-        : `Cleared due date on ${target.length} task${target.length > 1 ? "s" : ""}`
+    // Reconcile every success from its own response. The server owns the
+    // reminder lead time and the monthly anchor, so the optimistic write left
+    // rows showing a reminder chip the server had just discarded and a stale
+    // day-of-month that snapped the next occurrence back.
+    const applied = new Map<string, Partial<Task>>();
+    const failedIds = new Set<string>();
+    let missingPayload = false;
+    results.forEach((r, i) => {
+      if (r.status === "rejected") {
+        failedIds.add(target[i].id);
+        return;
+      }
+      const updated = r.value?.data?.task as Task | null | undefined;
+      if (updated) applied.set(target[i].id, dateFields(updated));
+      else missingPayload = true;
+    });
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (applied.has(t.id)) return { ...t, ...applied.get(t.id)! };
+        const before = previous.get(t.id);
+        if (failedIds.has(t.id) && before) return { ...t, ...dateFields(before) };
+        return t;
+      })
     );
+    if (failedIds.size > 0) {
+      toast.error(
+        `Failed to reschedule ${failedIds.size} of ${target.length} tasks`
+      );
+    } else if (dueIso) {
+      toast.success(
+        `Moved ${target.length} task${target.length > 1 ? "s" : ""} to ${deferLabel(dueIso)}`
+      );
+    } else {
+      toast.success(
+        `Cleared due date on ${target.length} task${target.length > 1 ? "s" : ""}`
+      );
+    }
+    // Re-fetch when a response carried no task, or a task was moved to a
+    // different list by a concurrent action, so nothing is left stale.
+    if (missingPayload || failedIds.size > 0) await refreshSilently();
   };
 
   const handleSubtasks = async (task: Task, subtasks: Subtask[]) => {
@@ -1818,6 +1953,20 @@ export default function TaskList({
                 ({completed.length})
               </span>
             </Button>
+            {!trashView && (
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant={groupByDue ? "secondary" : "outline"}
+                  onClick={() => setGroupByDue((v) => !v)}
+                  aria-pressed={groupByDue}
+                  title="Group open tasks into Overdue, Today, Tomorrow, This weekend, Later and No due date"
+                >
+                  <CalendarDays className="mr-1.5 h-4 w-4" />
+                  Group by due date
+                </Button>
+              </div>
+            )}
             <div className="flex items-center gap-1.5">
               <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
               <Select value={sort} onValueChange={(v) => setSort(v as SortMode)}>
@@ -1912,42 +2061,109 @@ export default function TaskList({
           </Dialog>
 
           {/* Incomplete Tasks */}
-          <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
-            {sortedIncomplete.length > 0 ? (
-              sortedIncomplete.map((task) => (
-                <TaskItem
-                  key={task.id}
-                  task={task}
-                  edit={edit}
-                  selected={selectedIds.has(task.id)}
-                  onSelect={handleSelect}
-                  onToggle={handleToggleComplete}
-                  onTogglePin={handleTogglePin}
-                  busy={pendingOps.has(task.id)}
-                  onSnooze={handleSnooze}
-                  snoozing={snoozingId === task.id}
-                  onDelete={handleDelete}
-                  onDuplicate={handleDuplicateTask}
-                  onSubtasks={handleSubtasks}
-                  onRefresh={refresh}
-                  onSetReminder={handleSetReminder}
-                  onDismissReminder={handleDismissReminder}
-                  onEnableReminders={requestReminderPermission}
-                  onDefer={handleDefer}
-                  remindersSupported={remindersSupported}
-                />
-              ))
-            ) : (
-              <p className="text-muted-foreground">
-                {term || filter !== "all"
-                  ? "No matching tasks"
-                  : "No tasks yet — add one below!"}
-              </p>
-            )}
-            <div className="px-1 mt-1">
-              <AddTaskButton onTaskAdded={refresh} />
+          {groupByDue && dueGroups.length > 0 ? (
+            // Grouped by due date. Each group is its own labelled section with
+            // its own dashed container, so the week reads as a shape instead
+            // of one flat sorted list. The completed section below stays a
+            // single hard section — grouping it would bury recently closed work
+            // under date headers that no longer mean anything.
+            <div className="flex flex-col gap-4">
+              {dueGroups.map((group) => {
+                const label = groupLabel(group.bucket);
+                const headingId = `due-group-${group.bucket}`;
+                const allGroupSelected = group.tasks.every((t) =>
+                  selectedIds.has(t.id)
+                );
+                return (
+                  <section
+                    key={group.bucket}
+                    aria-labelledby={headingId}
+                    className="flex flex-col"
+                  >
+                    <div className="flex items-center gap-2 px-1">
+                      <h2
+                        id={headingId}
+                        className="font-semibold text-sm text-muted-foreground"
+                      >
+                        {label} ({group.tasks.length})
+                      </h2>
+                      <Checkbox
+                        checked={allGroupSelected}
+                        onCheckedChange={() => handleToggleGroup(group)}
+                        aria-label={`Select all ${group.tasks.length} tasks in ${label}`}
+                        className="h-4 w-4"
+                      />
+                    </div>
+                    <div className="flex flex-col py-2 px-2 border rounded-lg border-dashed shadow-sm">
+                      {group.tasks.map((task) => (
+                        <TaskItem
+                          key={task.id}
+                          task={task}
+                          edit={edit}
+                          selected={selectedIds.has(task.id)}
+                          onSelect={handleSelect}
+                          onToggle={handleToggleComplete}
+                          onTogglePin={handleTogglePin}
+                          busy={pendingOps.has(task.id)}
+                          onSnooze={handleSnooze}
+                          snoozing={snoozingId === task.id}
+                          onDelete={handleDelete}
+                          onDuplicate={handleDuplicateTask}
+                          onSubtasks={handleSubtasks}
+                          onRefresh={refresh}
+                          onSetReminder={handleSetReminder}
+                          onDismissReminder={handleDismissReminder}
+                          onEnableReminders={requestReminderPermission}
+                          onDefer={handleDefer}
+                          remindersSupported={remindersSupported}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+              <div className="px-1">
+                <AddTaskButton onTaskAdded={refresh} />
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
+              {sortedIncomplete.length > 0 ? (
+                sortedIncomplete.map((task) => (
+                  <TaskItem
+                    key={task.id}
+                    task={task}
+                    edit={edit}
+                    selected={selectedIds.has(task.id)}
+                    onSelect={handleSelect}
+                    onToggle={handleToggleComplete}
+                    onTogglePin={handleTogglePin}
+                    busy={pendingOps.has(task.id)}
+                    onSnooze={handleSnooze}
+                    snoozing={snoozingId === task.id}
+                    onDelete={handleDelete}
+                    onDuplicate={handleDuplicateTask}
+                    onSubtasks={handleSubtasks}
+                    onRefresh={refresh}
+                    onSetReminder={handleSetReminder}
+                    onDismissReminder={handleDismissReminder}
+                    onEnableReminders={requestReminderPermission}
+                    onDefer={handleDefer}
+                    remindersSupported={remindersSupported}
+                  />
+                ))
+              ) : (
+                <p className="text-muted-foreground">
+                  {term || filter !== "all"
+                    ? "No matching tasks"
+                    : "No tasks yet — add one below!"}
+                </p>
+              )}
+              <div className="px-1 mt-1">
+                <AddTaskButton onTaskAdded={refresh} />
+              </div>
+            </div>
+          )}
 
           {/* Completed Tasks */}
           {completed.length > 0 && (
@@ -2169,7 +2385,11 @@ function TaskItem({
       </div>
       <div
         className={`flex items-center gap-1 shrink-0 transition-opacity ${
-          edit ? "" : "opacity-0 group-hover:opacity-100"
+          // Hidden until hover on pointer devices only. `md:` is the first
+          // breakpoint where a fine pointer is assumed, so phones and tablets
+          // keep the cluster visible — @media (hover: none) never fires the
+          // group-hover, which left Edit and Delete permanently invisible.
+          edit ? "" : "opacity-100 md:opacity-0 md:group-hover:opacity-100"
         }`}
       >
         <button

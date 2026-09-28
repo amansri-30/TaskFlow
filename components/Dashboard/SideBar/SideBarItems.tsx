@@ -18,6 +18,8 @@ const FILTER_BY_NAME: Record<string, string> = {
   Inbox: "all",
   Today: "today",
   Scheduled: "scheduled",
+  "Next 7 days": "next7",
+  "No due date": "nodate",
   "Filter & Label": "all",
   Trash: "trash",
   Pinned: "pinned",
@@ -46,7 +48,16 @@ export const SideBarItems = ({
         // "Filter & Label" is a section heading here, not a filter — sharing
         // the "all" value with Inbox would double-highlight both on load.
         const isHeading = name === "Filter & Label";
-        const count = name === "Today" ? stats.today : name === "Scheduled" ? stats.scheduled : 0;
+        const count =
+          name === "Today"
+            ? stats.today
+            : name === "Scheduled"
+            ? stats.scheduled
+            : name === "Next 7 days"
+            ? stats.next7
+            : name === "No due date"
+            ? stats.noDueDate
+            : 0;
         return (
           <button
             key={id}

@@ -55,6 +55,10 @@ const ThemeToggle = () => {
           size="icon"
           className="ml-2 h-8 w-8"
           onClick={toggleTheme}
+          // Radix Tooltip only attaches aria-describedby while it is open, so
+          // it never supplies an accessible name: without this the control is
+          // announced as an unlabelled button.
+          aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
         >
           {icon}
         </Button>

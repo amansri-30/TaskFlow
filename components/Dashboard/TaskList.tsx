@@ -126,7 +126,19 @@ const dateFields = (t: Task) => ({
   remindedAt: t.remindedAt ?? null,
 });
 
+/** The field set the reminder controls own — a sibling of `dateFields`. */
+const reminderFields = (t: Task) => ({
+  remindAt: t.remindAt ?? null,
+  remindedAt: t.remindedAt ?? null,
+});
+
 const GROUP_PREF_KEY = "taskflow:groupByDue";
+
+type UndoEntry =
+  | { kind: "delete"; label: string; ids: string[] }
+  | { kind: "edit"; label: string; prev: { id: string; patch: Record<string, unknown> }[] };
+
+const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
 export default function TaskList({
   filter,
@@ -154,11 +166,21 @@ export default function TaskList({
   const [groupByDue, setGroupByDue] = useState<boolean>(false);
   const [importing, setImporting] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [lastDeleted, setLastDeleted] = useState<Task | null>(null);
+  /**
+   * One-slot undo for the batch toolbar, replacing the delete-only Undo button.
+   *
+   * The four batch controls that commit on first click (priority, list,
+   * reschedule, delete) had wildly different recoverability: delete had a
+   * confirm dialog *and* an undo, while a mis-click on Reschedule over 40 tasks
+   * cost 40 manual reschedules. `edit` entries store a per-row PATCH body
+   * rather than a snapshot, so undo replays exactly one field and cannot
+   * clobber an unrelated concurrent change.
+   */
+  const [undoEntry, setUndoEntry] = useState<UndoEntry | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
-  const [snoozingId, setSnoozingId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const pendingRef = useRef<Set<string>>(new Set());
   const [pendingOps, setPendingOps] = useState<Set<string>>(new Set());
@@ -302,6 +324,18 @@ export default function TaskList({
       toast.error(`Failed to update priority for ${failed.length} of ${target.length} tasks`);
       return;
     }
+    // Only the rows the server actually accepted are undoable.
+    setUndoEntry({
+      kind: "edit",
+      label: `Undo priority change (${plural(target.length, "task")})`,
+      prev: target.map((t) => ({
+        id: t.id,
+        // The type marks priority optional while the schema defaults it, so an
+        // absent value has to fall back to the schema default: falling back to
+        // the just-written value would make the undo a silent no-op.
+        patch: { priority: previous.get(t.id)?.priority ?? "medium" },
+      })),
+    });
     toast.success(`Priority set to ${priority} for ${target.length} task${target.length > 1 ? "s" : ""}`);
   };
 
@@ -325,6 +359,16 @@ export default function TaskList({
       toast.error(`Failed to move ${failed.length} of ${target.length} tasks`);
       return;
     }
+    setUndoEntry({
+      kind: "edit",
+      label: `Undo move (${plural(target.length, "task")})`,
+      prev: target.map((t) => ({
+        id: t.id,
+        // Same schema-default reasoning as priority: `list` is required in the
+        // type but defaults in the model.
+        patch: { list: previous.get(t.id)?.list ?? "default" },
+      })),
+    });
     toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to "${list}"`);
   };
 
@@ -361,6 +405,11 @@ export default function TaskList({
         })),
         ...prev,
       ]);
+      setUndoEntry({
+        kind: "delete",
+        label: `Undo delete (${plural(succeeded.length, "task")})`,
+        ids: succeeded.map((t) => t.id),
+      });
     }
   };
 
@@ -426,12 +475,40 @@ export default function TaskList({
     setSelectedIds(new Set());
   }, [filter, search]);
 
-  // Global quick-search palette (Cmd/Ctrl+K).
+  // Refs so the keydown listener below is registered exactly once: re-binding
+  // on every render would churn the listener and could drop a keystroke that
+  // lands mid-update.
+  const undoEntryRef = useRef<UndoEntry | null>(null);
+  const handleUndoRef = useRef<(() => void) | null>(null);
+  undoEntryRef.current = undoEntry;
+
+  // Global quick-search palette (Cmd/Ctrl+K) and undo (Cmd/Ctrl+Z).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        // Never steal the browser's own text undo, and never fire from inside
+        // an overlay: the search box, the subtask field and the palette input
+        // all rely on Cmd+Z, and a Radix dialog/dropdown owns the keyboard
+        // while it is open.
+        const target = e.target as HTMLElement | null;
+        const isTextField =
+          !!target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable);
+        const overlayOpen = !!document.querySelector(
+          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
+        );
+        if (isTextField || overlayOpen) return;
+        if (!undoEntryRef.current) return;
+        e.preventDefault();
+        handleUndoRef.current?.();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -556,6 +633,7 @@ export default function TaskList({
   };
 
   const handleSetReminder = async (task: Task, remindAt: string | null) => {
+    if (!beginOp(task.id)) return;
     const previousTask = tasks.find((t) => t.id === task.id) ?? task;
     setTasks((prev) =>
       prev.map((t) =>
@@ -572,10 +650,20 @@ export default function TaskList({
           : "Reminder cleared"
       );
     } catch {
+      // Field-scoped rollback, like every other handler here: a whole-task
+      // snapshot would revert a pin or a subtask tick the server already
+      // accepted, and would reinstate a stale remindedAt that re-fires an
+      // acknowledged notification.
       setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? previousTask : t))
+        prev.map((t) =>
+          t.id === task.id
+            ? { ...t, ...reminderFields(previousTask) }
+            : t
+        )
       );
       toast.error("Could not update reminder");
+    } finally {
+      endOp(task.id);
     }
   };
 
@@ -915,8 +1003,13 @@ export default function TaskList({
 
   const handleSnooze = async (task: Task) => {
     if (!task.recurrence || task.recurrence === "none") return;
+    // The per-task pending set, not a single global slot. One slot only blocked
+    // a repeat click on whichever row currently owned it, so snoozing A and
+    // then B re-enabled A's button — and a second PATCH recomputed the next
+    // occurrence from the date the first one had just committed, advancing the
+    // chain two periods instead of one.
+    if (!beginOp(task.id)) return;
     const previousTask = tasks.find((t) => t.id === task.id) ?? task;
-    setSnoozingId(task.id);
     try {
       const response = await axios.patch(`/api/task/${task.id}`, {
         snooze: true,
@@ -962,8 +1055,25 @@ export default function TaskList({
       );
       toast.error("Failed to snooze task");
     } finally {
-      setSnoozingId(null);
+      endOp(task.id);
     }
+  };
+
+  /**
+   * Apply rows the server moved as a side effect of a parent edit. Rescheduling
+   * a completed recurring task also rewrites its pending occurrence, and the
+   * response body's `movedTasks` is the only signal the client gets — without
+   * this the child row keeps its pre-move date and reminder.
+   */
+  const applyMovedTasks = (moved: Task[]) => {
+    if (!moved.length) return;
+    const byId = new Map(moved.map((t) => [t.id, dateFields(t)]));
+    setTasks((prev) =>
+      prev.map((t) => {
+        const fields = byId.get(t.id);
+        return fields ? { ...t, ...fields } : t;
+      })
+    );
   };
 
   // Reschedule a single task. `null` clears the due date entirely.
@@ -993,6 +1103,7 @@ export default function TaskList({
           )
         );
       }
+      applyMovedTasks((response.data?.movedTasks as Task[]) || []);
       toast.success(dueIso ? `Moved to ${deferLabel(dueIso)}` : "Due date cleared");
     } catch {
       // Field-scoped rollback: restoring the whole task would clobber a
@@ -1030,6 +1141,7 @@ export default function TaskList({
     // day-of-month that snapped the next occurrence back.
     const applied = new Map<string, Partial<Task>>();
     const failedIds = new Set<string>();
+    const moved: Task[] = [];
     let missingPayload = false;
     results.forEach((r, i) => {
       if (r.status === "rejected") {
@@ -1039,6 +1151,8 @@ export default function TaskList({
       const updated = r.value?.data?.task as Task | null | undefined;
       if (updated) applied.set(target[i].id, dateFields(updated));
       else missingPayload = true;
+      const sideEffects = (r.value?.data?.movedTasks as Task[]) || [];
+      moved.push(...sideEffects);
     });
     setTasks((prev) =>
       prev.map((t) => {
@@ -1064,6 +1178,24 @@ export default function TaskList({
     // Re-fetch when a response carried no task, or a task was moved to a
     // different list by a concurrent action, so nothing is left stale.
     if (missingPayload || failedIds.size > 0) await refreshSilently();
+    applyMovedTasks(moved);
+    // Each row replays its OWN previous date — a shared date would collapse a
+    // mixed-date selection onto one day. `deferTo: null` restores "no due
+    // date", and because the server re-anchors monthlyDay from the date it is
+    // given, restoring the original date also restores the original anchor.
+    // Rows the server rejected are excluded: they never changed, so replaying
+    // them would only risk overwriting a concurrent edit.
+    const undoable = target.filter((t) => !failedIds.has(t.id));
+    if (undoable.length > 0) {
+      setUndoEntry({
+        kind: "edit",
+        label: `Undo reschedule (${plural(undoable.length, "task")})`,
+        prev: undoable.map((t) => ({
+          id: t.id,
+          patch: { deferTo: previous.get(t.id)?.scheduledAt ?? null },
+        })),
+      });
+    }
   };
 
   const handleSubtasks = async (task: Task, subtasks: Subtask[]) => {
@@ -1126,7 +1258,11 @@ export default function TaskList({
         { ...task, trashed: true, trashedAt: new Date().toISOString() },
         ...prev,
       ]);
-      setLastDeleted(task);
+      setUndoEntry({
+        kind: "delete",
+        label: "Undo delete (1 task)",
+        ids: [task.id],
+      });
       // Keep the batch counter honest: prune the id we just deleted.
       setSelectedIds((prev) => new Set(Array.from(prev).filter((id) => id !== task.id)));
       toast.success("Task moved to trash");
@@ -1140,17 +1276,71 @@ export default function TaskList({
     }
   };
 
-  const restoreTask = async (task: Task) => {
+  /**
+   * A permanent delete or an out-of-band restore invalidates any pending undo
+   * that referenced those rows, so the button cannot offer to restore a task
+   * that no longer exists.
+   */
+  const forgetUndoFor = (...ids: string[]) =>
+    setUndoEntry((prev) => {
+      if (!prev || prev.kind !== "delete") return prev;
+      const gone = new Set(ids);
+      const kept = prev.ids.filter((id) => !gone.has(id));
+      if (kept.length === prev.ids.length) return prev;
+      return kept.length
+        ? { ...prev, ids: kept, label: `Undo delete (${plural(kept.length, "task")})` }
+        : null;
+    });
+
+  /**
+   * Replay the last batch action. Field-scoped by construction: `edit` entries
+   * carry one PATCH body per row, so a concurrent pin or subtask tick on the
+   * same task is never reverted. A partially failing undo keeps its entry so
+   * the user can retry, and refetches to drop rows that were 404'd.
+   */
+  const handleUndo = async () => {
+    if (!undoEntry || undoBusy) return;
+    const entry = undoEntry;
+    setUndoBusy(true);
     try {
-      // Rewind the soft delete server-side; id and history are preserved.
-      await axios.patch(`/api/task/${task.id}`, { restore: true });
-      setLastDeleted(null);
-      toast.success("Task restored");
+      const calls: { id: string; patch: Record<string, unknown> }[] =
+        entry.kind === "delete"
+          ? entry.ids.map((id) => ({ id, patch: { restore: true } }))
+          : entry.prev;
+      if (calls.length === 0) {
+        setUndoEntry(null);
+        return;
+      }
+      const results = await Promise.allSettled(
+        calls.map((c) => axios.patch(`/api/task/${c.id}`, c.patch))
+      );
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      if (ok < calls.length) {
+        // The entry is kept so the failed rows can be retried.
+        toast.error(
+          `Undone ${ok} of ${calls.length} — ${calls.length - ok} could not be restored`
+        );
+      } else {
+        setUndoEntry(null);
+        toast.success(
+          entry.kind === "delete"
+            ? `Restored ${plural(ok, "task")}`
+            : `Reverted ${plural(ok, "task")}`
+        );
+      }
+      // Also drops rows that were trashed or removed elsewhere since the action.
       await refreshSilently();
     } catch {
-      toast.error("Could not restore task");
+      toast.error("Could not undo the last action");
+    } finally {
+      setUndoBusy(false);
     }
   };
+
+  // Keep the shortcut's handle current without re-binding the keydown listener.
+  useEffect(() => {
+    handleUndoRef.current = handleUndo;
+  });
 
   type ImportPayload = {
     taskTitle: string;
@@ -1470,7 +1660,7 @@ export default function TaskList({
     try {
       await axios.patch(`/api/task/${task.id}`, { restore: true });
       setTrashed((prev) => prev.filter((t) => t.id !== task.id));
-      setLastDeleted((prev) => (prev?.id === task.id ? null : prev));
+      forgetUndoFor(task.id);
       await refreshSilently();
       toast.success("Task restored from trash");
     } catch {
@@ -1489,7 +1679,7 @@ export default function TaskList({
     try {
       await axios.delete(`/api/task/${task.id}?permanent=true`);
       setTrashed((prev) => prev.filter((t) => t.id !== task.id));
-      setLastDeleted((prev) => (prev?.id === task.id ? null : prev));
+      forgetUndoFor(task.id);
       toast.success("Task permanently deleted");
     } catch {
       toast.error("Could not delete task");
@@ -1519,7 +1709,8 @@ export default function TaskList({
       return;
     }
     setTrashed(emptyTasks);
-    setLastDeleted(null);
+    // Every row an undo could restore is gone, so the entry is worthless.
+    setUndoEntry(null);
     toast.success("Trash emptied");
   };
 
@@ -1985,16 +2176,31 @@ export default function TaskList({
                 </SelectContent>
               </Select>
             </div>
-            {lastDeleted ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => restoreTask(lastDeleted)}
-                className="text-emerald-600 hover:text-emerald-600"
-              >
-                <Undo2 className="mr-1.5 h-4 w-4" />
-                Undo delete
-              </Button>
+            {undoEntry ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleUndo}
+                  disabled={undoBusy}
+                  className="text-emerald-600 hover:text-emerald-600"
+                  // Always visible, never hover-gated: a transient control has
+                  // to be discoverable at the moment it is the only way back.
+                  title="Undo the last batch action (Cmd/Ctrl+Z)"
+                >
+                  <Undo2 className="mr-1.5 h-4 w-4" />
+                  {undoEntry.label}
+                </Button>
+                {/* The button appears only after an action, so it is announced
+                    rather than silently added to the page. Kept outside the
+                    button so the live region is not nested in an interactive
+                    element. The button's own text is its accessible name. */}
+                <span className="sr-only" role="status" aria-live="polite">
+                  {undoBusy
+                    ? "Undoing the last batch action"
+                    : `${undoEntry.label} is available`}
+                </span>
+              </>
             ) : null}
             {importExportControls}
             <span className="ml-auto text-xs text-muted-foreground">
@@ -2087,12 +2293,19 @@ export default function TaskList({
                       >
                         {label} ({group.tasks.length})
                       </h2>
-                      <Checkbox
-                        checked={allGroupSelected}
-                        onCheckedChange={() => handleToggleGroup(group)}
-                        aria-label={`Select all ${group.tasks.length} tasks in ${label}`}
-                        className="h-4 w-4"
-                      />
+                      {/* Select mode only. Outside it the batch toolbar is not
+                          rendered and the rows ignore `selected`, so a live
+                          checkbox here would build a selection with no visible
+                          trace — and "Select" would later reveal "3 selected"
+                          over tasks the user never picked. */}
+                      {edit && (
+                        <Checkbox
+                          checked={allGroupSelected}
+                          onCheckedChange={() => handleToggleGroup(group)}
+                          aria-label={`Select all ${group.tasks.length} tasks in ${label}`}
+                          className="h-4 w-4"
+                        />
+                      )}
                     </div>
                     <div className="flex flex-col py-2 px-2 border rounded-lg border-dashed shadow-sm">
                       {group.tasks.map((task) => (
@@ -2106,7 +2319,6 @@ export default function TaskList({
                           onTogglePin={handleTogglePin}
                           busy={pendingOps.has(task.id)}
                           onSnooze={handleSnooze}
-                          snoozing={snoozingId === task.id}
                           onDelete={handleDelete}
                           onDuplicate={handleDuplicateTask}
                           onSubtasks={handleSubtasks}
@@ -2140,7 +2352,6 @@ export default function TaskList({
                     onTogglePin={handleTogglePin}
                     busy={pendingOps.has(task.id)}
                     onSnooze={handleSnooze}
-                    snoozing={snoozingId === task.id}
                     onDelete={handleDelete}
                     onDuplicate={handleDuplicateTask}
                     onSubtasks={handleSubtasks}
@@ -2183,7 +2394,6 @@ export default function TaskList({
                     onTogglePin={handleTogglePin}
                     busy={pendingOps.has(task.id)}
                     onSnooze={handleSnooze}
-                    snoozing={snoozingId === task.id}
                     onDelete={handleDelete}
                     onDuplicate={handleDuplicateTask}
                     onSubtasks={handleSubtasks}
@@ -2261,7 +2471,6 @@ function TaskItem({
   onToggle,
   onTogglePin,
   onSnooze,
-  snoozing,
   onDelete,
   onDuplicate,
   onSubtasks,
@@ -2280,7 +2489,6 @@ function TaskItem({
   onToggle: (task: Task, value: boolean) => void;
   onTogglePin: (task: Task) => void;
   onSnooze: (task: Task) => void;
-  snoozing: boolean;
   onDelete: (task: Task) => void;
   onDuplicate: (task: Task) => void;
   onSubtasks: (task: Task, subtasks: Subtask[]) => void;
@@ -2410,9 +2618,9 @@ function TaskItem({
             aria-label={`Snooze ${task.title}`}
             title="Snooze to next occurrence (stays incomplete)"
             onClick={() => onSnooze(task)}
-            disabled={snoozing || busy}
+            disabled={busy}
             className={`p-1 hover:bg-muted rounded ${
-              snoozing ? "opacity-50 cursor-not-allowed" : ""
+              busy ? "opacity-50 cursor-not-allowed" : ""
             }`}
           >
             <TimerReset className="h-4 w-4" />
@@ -2880,10 +3088,11 @@ function dateFnsFormat(date: Date): string {
   // addDays is DST-safe; the old +24h arithmetic could skip/duplicate a day
   // across a daylight-saving boundary.
   if (isSameDay(date, addDays(today, 1))) return "Tomorrow";
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  // deferLabel carries the year-elision rule (omitted only for the current
+  // year). The row chip used its own formatter and always dropped the year, so
+  // a task due Jan 2027 read "Jan 5" here and "Jan 5, 2027" in the defer toast
+  // and the command palette for the very same date.
+  return deferLabel(date);
 }
 
 // --------------------------------------------------------------------------------------

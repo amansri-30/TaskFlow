@@ -31,6 +31,9 @@ const BackButton = () => {
           size="icon"
           className="ml-2 h-8 w-8"
           onClick={handleBack}
+          // A Radix Tooltip only contributes aria-describedby while open, so it
+          // never names the control for a screen reader.
+          aria-label="Go back"
         >
           <CircleArrowLeft01Icon />
         </Button>

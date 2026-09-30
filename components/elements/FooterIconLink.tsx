@@ -8,15 +8,22 @@ import { Button } from "../ui/button";
 import CircleArrowUpRightIcon from "@/public/svg/icons/CircleArrowUpRightIcon";
 import BuyMeACoffeeBrandLogo from "@/public/svg/icons/BuyMeACoffeeBrandLogo";
 
-export default function FooterIconLink() {
-  const BuyMeCoffeeText = [
-    "Support TaskFlow ☕️",
-    "Fuel Our Day 💪",
-    "Recharge Us ☕️",
-    "Boost Our Energy 🚀",
-    "Coffee Break! ☕️",
+// Hoisted out of the component and the random pick is made once per page load.
+// Computing it during render meant the name changed on every re-render, so
+// even a tooltip-derived accessible name was unstable.
+const BUY_ME_COFFEE_LINES = [
+  "Support TaskFlow ☕️",
+  "Fuel Our Day 💪",
+  "Recharge Us ☕️",
+  "Boost Our Energy 🚀",
+  "Coffee Break! ☕️",
+];
+const BUY_ME_COFFEE_LINE =
+  BUY_ME_COFFEE_LINES[
+    Math.floor(Math.random() * BUY_ME_COFFEE_LINES.length)
   ];
 
+export default function FooterIconLink() {
   return (
     <div className="flex flex-col-reverse justify-center sm:flex-row sm:space-x-4 items-center w-full sm:w-auto">
       <ul className="flex gap-4">
@@ -25,7 +32,7 @@ export default function FooterIconLink() {
             key={id}
             name={item.name}
             triggerJsxElement={
-              <a key={id} href={item.link}>
+              <a key={id} href={item.link} aria-label={item.name}>
                 {item.icon}
               </a>
             }
@@ -51,15 +58,16 @@ export default function FooterIconLink() {
           }
         />
         <ToolTipIcon
-          name={
-            BuyMeCoffeeText[Math.floor(Math.random() * BuyMeCoffeeText.length)]
-          }
+          name={BUY_ME_COFFEE_LINE}
           triggerJsxElement={
             <Button
               size={"sm"}
               className="buy-me-coffee-button gap-1 shadow-lg dark:hover:bg-gradient-to-r from-[#281D24] to-[#281D24]"
               variant={"outline"}
               onClick={() => window.open("/buy-a-coffee", "_self")}
+              // Logo-only button, so it needs a real name rather than the
+              // decorative random line in the tooltip.
+              aria-label="Buy me a coffee"
             >
               <BuyMeACoffeeBrandLogo />
             </Button>

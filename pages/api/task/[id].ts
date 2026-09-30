@@ -192,6 +192,22 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // of simultaneous reminders a reschedule of a later task re-armed
         // remindedAt = null and then had it overwritten by this write — the
         // freshly moved reminder was muted permanently.
+        // An existing stamp is terminal, and this check is deliberately
+        // unconditional: the `remindedAt` compare below stops a reschedule
+        // from being muted by an in-flight acknowledgement, but on its own it
+        // re-notified. A second tab polling inside the same window holds a
+        // stale `remindedAt: null`, so it passes the due check and sends a
+        // byte-identical request for a reminder that is already stamped. That
+        // stamp is the only thing making delivery exactly-once across tabs.
+        // Gating it on `scannedRemindAt` would let any caller that omits the
+        // optional field re-stamp and re-notify, so the guarantee would depend
+        // on client cooperation.
+        if (task.remindedAt) {
+          return handleRes(res, 200, true, "Reminder already acknowledged", {
+            task: mapTask(task),
+            acknowledged: false,
+          });
+        }
         if (scannedRemindAt !== undefined) {
           const current = task.remindAt instanceof Date ? task.remindAt.getTime() : null;
           const scanned = scannedRemindAt ? new Date(scannedRemindAt).getTime() : null;
@@ -244,9 +260,27 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         if (task.trashed) {
           return handleRes(res, 400, false, "Restore the task before rescheduling it");
         }
+        // Looked up before the branch so BOTH arms can act on the chain. The
+        // loop used to live only in the date arm, so clearing a completed
+        // recurring parent's due date left its pending occurrence dated — the
+        // chain was half-cleared and re-anchored on the pre-clear day.
+        const pending = await Task.find({
+          user: task.user,
+          baseTaskId: task._id,
+          completed: false,
+          trashed: { $ne: true },
+        });
+        const movedTasks: any[] = [];
         if (deferTo === null) {
           moveDueDate(task, null);
           task.monthlyDay = null;
+          for (const child of pending) {
+            moveDueDate(child, null);
+            child.monthlyDay = null;
+            child.updatedAt = new Date();
+            await child.save();
+            movedTasks.push(mapTask(child));
+          }
         } else {
           const parsed = new Date(deferTo);
           if (isNaN(parsed.getTime())) {
@@ -255,6 +289,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           if (parsed.getTime() === (task.scheduledAt instanceof Date ? task.scheduledAt.getTime() : null)) {
             return handleRes(res, 200, true, "Task already has that due date", {
               task: mapTask(task),
+              movedTasks: [],
             });
           }
           moveDueDate(task, parsed);
@@ -264,12 +299,6 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           // A pending occurrence of a recurring chain still sits on the old
           // date. Move it with the parent — including its reminder, so the
           // lead time survives instead of drifting a week every defer.
-          const pending = await Task.find({
-            user: task.user,
-            baseTaskId: task._id,
-            completed: false,
-            trashed: { $ne: true },
-          });
           for (const child of pending) {
             moveDueDate(child, parsed);
             // Re-anchor the child too. Moving it to the 20th while it kept
@@ -278,12 +307,17 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             setMonthlyDay(child, parsed);
             child.updatedAt = new Date();
             await child.save();
+            movedTasks.push(mapTask(child));
           }
         }
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task rescheduled", {
           task: mapTask(task),
+          // The children changed too, and the client reconciles from response
+          // bodies rather than refetching. Returning only the parent left the
+          // moved occurrence rendered with its pre-move date and reminder.
+          movedTasks,
         });
       }
 

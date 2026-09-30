@@ -49,6 +49,9 @@ export default function BackToTopButton() {
                 size="icon"
                 className="ml-2 h-8 w-8"
                 onClick={scrollToTop}
+                // The tooltip only adds aria-describedby while open, so it never
+                // gives the icon-only button an accessible name.
+                aria-label="Scroll to top"
               >
                 <CircleArrowUp03Icon />
               </Button>

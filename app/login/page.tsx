@@ -30,7 +30,16 @@ export default function LoginForm() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const target = params.get("redirect");
-    setRedirectTo(target && target.startsWith("/") ? target : null);
+    // `startsWith("/")` is not an allowlist. It accepts the protocol-relative
+    // "//evil.com", and WHATWG URL parsing treats "\" as "/" for special
+    // schemes, so "/\evil.com" and "/\/evil.com" resolve cross-origin too.
+    // The sink below runs immediately after a *successful* authentication, so
+    // anything that lands off-origin here is a post-login phishing primitive.
+    // Require a single leading slash that is not followed by a slash or
+    // backslash, and keep it to a real in-app path.
+    const isSafe =
+      !!target && /^\/(?![/\\])/.test(target) && !/^\/[^/]*\.\./.test(target);
+    setRedirectTo(isSafe ? target : null);
   }, []);
 
   // A persisted user alone is not proof of a valid session. Re-validate the

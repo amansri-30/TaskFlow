@@ -13,10 +13,25 @@ function read(): string[] {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     cache = raw ? (JSON.parse(raw) as string[]) : [];
     if (!Array.isArray(cache)) cache = [];
-    cache = cache.filter(
-      (name): name is string =>
-        typeof name === "string" && !!name.trim().toLowerCase()
-    );
+    // Normalize, not just validate. `addCustomList` stores trimmed and
+    // lowercased names, but anything already in storage — a hand edit, or a
+    // value written before that normalization existed — kept its original case.
+    // The filter then rejected nothing, so "Work" and "work" both survived as
+    // two entries that render identically, and the case-sensitive `list:`
+    // comparison showed an empty list whenever the task's stored name didn't
+    // match the one in the sidebar by character. Normalizing on read makes the
+    // sidebar and the filter agree on one spelling, and dedupe collapses the
+    // duplicates.
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const name of cache) {
+      if (typeof name !== "string") continue;
+      const clean = name.trim().toLowerCase();
+      if (!clean || seen.has(clean)) continue;
+      seen.add(clean);
+      normalized.push(clean);
+    }
+    cache = normalized;
   } catch {
     cache = [];
   }

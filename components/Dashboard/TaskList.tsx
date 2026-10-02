@@ -29,7 +29,8 @@ import {
   ArrowUpDown,
   Download,
   Upload,
-  Undo2,
+Undo2,
+  History,
   TrendingUp,
   Repeat,
   Copy,
@@ -134,9 +135,32 @@ const reminderFields = (t: Task) => ({
 
 const GROUP_PREF_KEY = "taskflow:groupByDue";
 
+/**
+ * An undoable action, newest last. `edit` entries store a per-row PATCH body
+ * rather than a task snapshot, so replaying one touches exactly the fields it
+ * changed and cannot clobber an unrelated concurrent edit.
+ */
 type UndoEntry =
-  | { kind: "delete"; label: string; ids: string[] }
-  | { kind: "edit"; label: string; prev: { id: string; patch: Record<string, unknown> }[] };
+  | { kind: "delete"; label: string; at: number; ids: string[] }
+  | {
+      kind: "edit";
+      label: string;
+      at: number;
+      prev: { id: string; patch: Record<string, unknown> }[];
+    };
+
+/** How many batch actions stay recoverable. */
+const UNDO_HISTORY_LIMIT = 20;
+
+/**
+ * `Omit` over a union collapses to the keys the members share, which would hide
+ * `prev` and `ids` at every call site. Distributing over the union keeps each
+ * variant's own fields.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
+type NewUndoEntry = DistributiveOmit<UndoEntry, "at">;
 
 const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
@@ -167,17 +191,30 @@ export default function TaskList({
   const [importing, setImporting] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   /**
-   * One-slot undo for the batch toolbar, replacing the delete-only Undo button.
+   * Bounded undo history for the batch toolbar, newest last.
    *
    * The four batch controls that commit on first click (priority, list,
    * reschedule, delete) had wildly different recoverability: delete had a
    * confirm dialog *and* an undo, while a mis-click on Reschedule over 40 tasks
-   * cost 40 manual reschedules. `edit` entries store a per-row PATCH body
-   * rather than a snapshot, so undo replays exactly one field and cannot
-   * clobber an unrelated concurrent change.
+   * cost 40 manual reschedules. One undoable slot fixed the worst case but not
+   * the realistic one — bulk cleanup is several actions in a row, and a single
+   * slot meant the second action silently threw away the first one's only way
+   * back. So the history is a LIFO stack: Cmd/Ctrl+Z or the button pops the
+   * newest entry, and the history menu can replay any one of them.
    */
-  const [undoEntry, setUndoEntry] = useState<UndoEntry | null>(null);
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
   const [undoBusy, setUndoBusy] = useState(false);
+  const [undoMenuOpen, setUndoMenuOpen] = useState(false);
+  /**
+   * Record an action. Callers must pass only the rows the server accepted, so a
+   * partially failed batch contributes just its fulfilled subset.
+   */
+  const pushUndo = (entry: NewUndoEntry) =>
+    setUndoStack((prev) =>
+      [...prev, { ...entry, at: Date.now() } as UndoEntry].slice(
+        -UNDO_HISTORY_LIMIT
+      )
+    );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
@@ -257,9 +294,27 @@ export default function TaskList({
     }
     // Always re-fetch after recurring tasks are involved — even on partial
     // failure the server may have created next occurrences we haven't seen.
-    if (hadRecurring && succeededCount > 0) {
+if (hadRecurring && succeededCount > 0) {
       await refreshSilently();
       toast.success("Next occurrences scheduled for repeating tasks");
+    }
+    // Batch-complete is undoable, so the reverse move needs an entry too —
+    // otherwise undoing a reopen was itself impossible. Rows the server
+    // rejected are excluded so a replay only touches work that changed.
+    if (succeededCount > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `Undo complete (${plural(succeededCount, "task")})`,
+        prev: target
+          .filter((_, i) => results[i].status === "fulfilled")
+          .map((t) => ({
+            id: t.id,
+            // `completedAt` is deliberately absent: the handler derives it from
+            // `completed`, so sending the old timestamp would be ignored.
+            // Reopening also removes any occurrence this spawned.
+            patch: { completed: false },
+          })),
+      });
     }
   };
 
@@ -296,9 +351,17 @@ export default function TaskList({
       setTasks((prev) =>
         prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
       );
-      toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
+toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
       return;
     }
+    pushUndo({
+      kind: "edit",
+      label: `Undo reopen (${plural(target.length, "task")})`,
+      prev: target.map((t) => ({
+        id: t.id,
+        patch: { completed: true },
+      })),
+    });
     toast.success(`Reopened ${target.length} task${target.length > 1 ? "s" : ""}`);
   };
 
@@ -325,7 +388,7 @@ export default function TaskList({
       return;
     }
     // Only the rows the server actually accepted are undoable.
-    setUndoEntry({
+    pushUndo({
       kind: "edit",
       label: `Undo priority change (${plural(target.length, "task")})`,
       prev: target.map((t) => ({
@@ -359,7 +422,7 @@ export default function TaskList({
       toast.error(`Failed to move ${failed.length} of ${target.length} tasks`);
       return;
     }
-    setUndoEntry({
+    pushUndo({
       kind: "edit",
       label: `Undo move (${plural(target.length, "task")})`,
       prev: target.map((t) => ({
@@ -405,7 +468,7 @@ export default function TaskList({
         })),
         ...prev,
       ]);
-      setUndoEntry({
+      pushUndo({
         kind: "delete",
         label: `Undo delete (${plural(succeeded.length, "task")})`,
         ids: succeeded.map((t) => t.id),
@@ -478,9 +541,9 @@ export default function TaskList({
   // Refs so the keydown listener below is registered exactly once: re-binding
   // on every render would churn the listener and could drop a keystroke that
   // lands mid-update.
-  const undoEntryRef = useRef<UndoEntry | null>(null);
+  const undoStackRef = useRef<UndoEntry[]>([]);
   const handleUndoRef = useRef<(() => void) | null>(null);
-  undoEntryRef.current = undoEntry;
+  undoStackRef.current = undoStack;
 
   // Global quick-search palette (Cmd/Ctrl+K) and undo (Cmd/Ctrl+Z).
   useEffect(() => {
@@ -506,7 +569,7 @@ export default function TaskList({
           '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
         );
         if (isTextField || overlayOpen) return;
-        if (!undoEntryRef.current) return;
+        if (!undoStackRef.current.length) return;
         e.preventDefault();
         handleUndoRef.current?.();
       }
@@ -1187,7 +1250,7 @@ export default function TaskList({
     // them would only risk overwriting a concurrent edit.
     const undoable = target.filter((t) => !failedIds.has(t.id));
     if (undoable.length > 0) {
-      setUndoEntry({
+      pushUndo({
         kind: "edit",
         label: `Undo reschedule (${plural(undoable.length, "task")})`,
         prev: undoable.map((t) => ({
@@ -1258,7 +1321,7 @@ export default function TaskList({
         { ...task, trashed: true, trashedAt: new Date().toISOString() },
         ...prev,
       ]);
-      setUndoEntry({
+      pushUndo({
         kind: "delete",
         label: "Undo delete (1 task)",
         ids: [task.id],
@@ -1276,31 +1339,53 @@ export default function TaskList({
     }
   };
 
-  /**
-   * A permanent delete or an out-of-band restore invalidates any pending undo
-   * that referenced those rows, so the button cannot offer to restore a task
-   * that no longer exists.
+/**
+   * A permanent delete invalidates any pending undo that referenced those rows,
+   * so the history cannot offer to restore a task that no longer exists. Edit
+   * entries are left alone: they only rewrite a field, which is still a valid
+   * request for a task that no longer needs restoring.
    */
-  const forgetUndoFor = (...ids: string[]) =>
-    setUndoEntry((prev) => {
-      if (!prev || prev.kind !== "delete") return prev;
-      const gone = new Set(ids);
-      const kept = prev.ids.filter((id) => !gone.has(id));
-      if (kept.length === prev.ids.length) return prev;
-      return kept.length
-        ? { ...prev, ids: kept, label: `Undo delete (${plural(kept.length, "task")})` }
-        : null;
-    });
+  const forgetUndoFor = (...ids: string[]) => {
+    const gone = new Set(ids);
+    setUndoStack((prev) =>
+      prev
+        .map((entry) => {
+          if (entry.kind !== "delete") return entry;
+          const kept = entry.ids.filter((id) => !gone.has(id));
+          if (kept.length === entry.ids.length) return entry;
+          return kept.length
+            ? {
+                ...entry,
+                ids: kept,
+                label: `Undo delete (${plural(kept.length, "task")})`,
+              }
+            : null;
+        })
+        .filter((entry): entry is UndoEntry => entry !== null)
+    );
+  };
 
   /**
-   * Replay the last batch action. Field-scoped by construction: `edit` entries
-   * carry one PATCH body per row, so a concurrent pin or subtask tick on the
-   * same task is never reverted. A partially failing undo keeps its entry so
-   * the user can retry, and refetches to drop rows that were 404'd.
+   * Replay one batch action, and every action recorded after it.
+   *
+   * Entries are consumed newest-first as a LIFO stack rather than
+   * independently: two actions can touch the same field, so replaying an older
+   * one while a newer one is still applied would restore the wrong value.
+   * Dropping everything above the replayed entry is what keeps the remaining
+   * history consistent with what's on screen.
+   *
+   * Replay is field-scoped by construction — `edit` entries carry one PATCH body
+   * per row — so a concurrent pin or subtask tick on the same task survives. A
+   * partial failure keeps the whole stack and refetches, since the rows that
+   * failed are still the user's to retry.
    */
-  const handleUndo = async () => {
-    if (!undoEntry || undoBusy) return;
-    const entry = undoEntry;
+  const handleUndo = async (index?: number) => {
+    if (undoBusy || undoStack.length === 0) return;
+    const target =
+      index === undefined
+        ? undoStack.length - 1
+        : Math.min(Math.max(index, 0), undoStack.length - 1);
+    const entry = undoStack[target];
     setUndoBusy(true);
     try {
       const calls: { id: string; patch: Record<string, unknown> }[] =
@@ -1308,20 +1393,24 @@ export default function TaskList({
           ? entry.ids.map((id) => ({ id, patch: { restore: true } }))
           : entry.prev;
       if (calls.length === 0) {
-        setUndoEntry(null);
+        // Nothing to replay: drop this entry too so the stack can't wedge.
+        setUndoStack((prev) => prev.slice(0, target));
         return;
       }
       const results = await Promise.allSettled(
         calls.map((c) => axios.patch(`/api/task/${c.id}`, c.patch))
       );
       const ok = results.filter((r) => r.status === "fulfilled").length;
+      // Consumed either way: the rows that succeeded are already reverted, so
+      // leaving the entry would offer to replay it and revert them a second
+      // time. A failure is reported rather than hidden, and the refetch below
+      // shows the true state.
+      setUndoStack((prev) => prev.slice(0, target));
       if (ok < calls.length) {
-        // The entry is kept so the failed rows can be retried.
         toast.error(
           `Undone ${ok} of ${calls.length} — ${calls.length - ok} could not be restored`
         );
       } else {
-        setUndoEntry(null);
         toast.success(
           entry.kind === "delete"
             ? `Restored ${plural(ok, "task")}`
@@ -1334,6 +1423,7 @@ export default function TaskList({
       toast.error("Could not undo the last action");
     } finally {
       setUndoBusy(false);
+      setUndoMenuOpen(false);
     }
   };
 
@@ -1559,9 +1649,27 @@ export default function TaskList({
     } else {
       toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
     }
-    if (hadRecurring && succeededCount > 0) {
+if (hadRecurring && succeededCount > 0) {
       await refreshSilently();
       toast.success("Next occurrences scheduled for repeating tasks");
+    }
+    // "Complete all" is the widest-reaching control in the app: one click
+    // completes every open task in the current view, with no confirm dialog.
+    // Rows the server rejected are excluded so a replay only touches work that
+    // actually changed.
+    if (succeededCount > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `Undo complete (${plural(succeededCount, "task")})`,
+        prev: pending
+          .filter((_, i) => results[i].status === "fulfilled")
+          .map((t) => ({
+            id: t.id,
+            // `completed` alone: the handler derives completedAt from it,
+            // and reopening also removes any occurrence this spawned.
+            patch: { completed: false },
+          })),
+      });
     }
   };
 
@@ -1592,7 +1700,7 @@ export default function TaskList({
     } else {
       toast.success("Cleared completed tasks (moved to trash)");
     }
-    // Track what actually reached the trash even on partial failure.
+// Track what actually reached the trash even on partial failure.
     if (succeeded.length > 0) {
       setTrashed((prev) => [
         ...succeeded.map((t) => ({
@@ -1602,6 +1710,13 @@ export default function TaskList({
         })),
         ...prev,
       ]);
+      // Clearing completed is a bulk delete like any other, so it belongs in the
+      // undo history: one mis-click can send dozens of tasks to the trash.
+      pushUndo({
+        kind: "delete",
+        label: `Undo delete (${plural(succeeded.length, "task")})`,
+        ids: succeeded.map((t) => t.id),
+      });
     }
   };
 
@@ -1709,8 +1824,8 @@ export default function TaskList({
       return;
     }
     setTrashed(emptyTasks);
-    // Every row an undo could restore is gone, so the entry is worthless.
-    setUndoEntry(null);
+// Every row an undo could restore is gone, so the whole history is worthless.
+    setUndoStack([]);
     toast.success("Trash emptied");
   };
 
@@ -2176,12 +2291,12 @@ export default function TaskList({
                 </SelectContent>
               </Select>
             </div>
-            {undoEntry ? (
+{undoStack.length > 0 ? (
               <>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={handleUndo}
+                  onClick={() => handleUndo()}
                   disabled={undoBusy}
                   className="text-emerald-600 hover:text-emerald-600"
                   // Always visible, never hover-gated: a transient control has
@@ -2189,8 +2304,57 @@ export default function TaskList({
                   title="Undo the last batch action (Cmd/Ctrl+Z)"
                 >
                   <Undo2 className="mr-1.5 h-4 w-4" />
-                  {undoEntry.label}
+                  {undoStack[undoStack.length - 1].label}
                 </Button>
+                {/* One slot of undo only covered the most recent action, so a
+                    second batch edit silently discarded the first one's way
+                    back. This lists the whole recoverable history — clicking an
+                    older entry replays it and discards everything recorded after
+                    it, since newer actions may have overwritten the same field. */}
+                {undoStack.length > 1 ? (
+                  <DropdownMenu
+                    open={undoMenuOpen}
+                    onOpenChange={setUndoMenuOpen}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={undoBusy}
+                        className="px-2 text-emerald-600 hover:text-emerald-600"
+                        aria-label={`Show undo history, ${undoStack.length} actions`}
+                        title="Undo history"
+                      >
+                        <History className="h-4 w-4" />
+                        <span className="ml-1 text-muted-foreground">
+                          {undoStack.length}
+                        </span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-72">
+                      <DropdownMenuLabel className="text-xs text-muted-foreground">
+                        Undo history — newest first
+                      </DropdownMenuLabel>
+                      {[...undoStack].reverse().map((entry, i) => {
+                        const index = undoStack.length - 1 - i;
+                        return (
+                          <DropdownMenuItem
+                            key={`${entry.at}-${index}`}
+                            disabled={undoBusy}
+                            // Selecting an older entry replays it and drops the
+                            // newer ones, so the button and the list can never
+                            // disagree about what the next undo will hit.
+                            onSelect={() => handleUndo(index)}
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {entry.label}
+                            </span>
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
                 {/* The button appears only after an action, so it is announced
                     rather than silently added to the page. Kept outside the
                     button so the live region is not nested in an interactive
@@ -2198,7 +2362,7 @@ export default function TaskList({
                 <span className="sr-only" role="status" aria-live="polite">
                   {undoBusy
                     ? "Undoing the last batch action"
-                    : `${undoEntry.label} is available`}
+                    : `${undoStack[undoStack.length - 1].label} is available`}
                 </span>
               </>
             ) : null}

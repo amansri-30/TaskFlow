@@ -30,6 +30,39 @@ const newTask = catchAsyncError(
       return handleRes(res, 400, false, "Invalid recurrence. Use none, daily, weekly, or monthly.");
     }
 
+    // Create has to enforce the same input contract as PUT, or the two entry
+    // points disagree: PUT validated the date and capped description/notes,
+    // while here they went straight to Mongoose. A malformed date then raised a
+    // CastError and a long description a ValidationError, so the client saw an
+    // opaque 500 for input the edit path answered with a clean 400. Validate
+    // first and the failure is reported instead of thrown.
+    let resolvedDueAt: Date | null = null;
+    if (dueDate) {
+      const parsedDue = new Date(dueDate);
+      if (isNaN(parsedDue.getTime())) {
+        return handleRes(res, 400, false, "Invalid due date");
+      }
+      resolvedDueAt = parsedDue;
+    }
+    let resolvedCompletedAt: Date | null = null;
+    if (completed === true) {
+      if (completedAt) {
+        const parsedCompleted = new Date(completedAt);
+        if (isNaN(parsedCompleted.getTime())) {
+          return handleRes(res, 400, false, "Invalid completion date");
+        }
+        resolvedCompletedAt = parsedCompleted;
+      } else {
+        resolvedCompletedAt = new Date();
+      }
+    }
+    if (description && String(description).length > 100) {
+      return handleRes(res, 400, false, "Description cannot exceed 100 characters");
+    }
+    if (notes && String(notes).length > 4000) {
+      return handleRes(res, 400, false, "Notes cannot exceed 4000 characters");
+    }
+
     const user = await isAuthenticated(req, res);
     if (!user) return handleRes(res, 401, false, "No account is logged in");
 
@@ -42,8 +75,8 @@ const newTask = catchAsyncError(
     // fall back to the server-side day only when it didn't.
     const resolvedMonthlyDay =
       clientMonthlyDay ??
-      (effectiveRecurrence === "monthly" && dueDate
-        ? new Date(dueDate).getDate()
+      (effectiveRecurrence === "monthly" && resolvedDueAt
+        ? resolvedDueAt.getDate()
         : null);
 
     const normalizedCompleted = typeof completed === "boolean" ? completed : false;
@@ -67,7 +100,9 @@ const newTask = catchAsyncError(
       description: description || "",
       notes: typeof notes === "string" ? notes.slice(0, 4000) : "",
       user: user._id,
-      scheduledAt: dueDate,
+      // Validated above, so Mongoose receives a real Date or null rather than a
+      // string it would have to cast — and reject with a 500 if it couldn't.
+      scheduledAt: resolvedDueAt,
       remindAt: resolvedRemindAt,
       list,
       priority: priority || "medium",
@@ -76,12 +111,7 @@ const newTask = catchAsyncError(
       tags: normalizeTags(tags),
       subtasks: normalizeSubtasks(subtasks),
       completed: normalizedCompleted,
-      completedAt:
-        normalizedCompleted && completedAt
-          ? new Date(completedAt)
-          : normalizedCompleted
-          ? new Date()
-          : null,
+      completedAt: normalizedCompleted ? resolvedCompletedAt : null,
       pinned: typeof pinned === "boolean" ? pinned : false,
       trashed: importedTrashed,
       trashedAt: resolvedTrashedAt,

@@ -57,6 +57,7 @@ export default function CommandPalette({
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -108,6 +109,14 @@ export default function CommandPalette({
   useEffect(() => {
     setActiveIndex((i) => Math.min(i, Math.max(0, results.length - 1)));
   }, [results.length]);
+
+  // The results list scrolls inside a max-h box, so moving the highlight past
+  // the fold left it off-screen with no visual cue of which row Enter acts on.
+  // The active row is referenced rather than queried by id because task ids
+  // contain characters that are awkward to embed in a selector.
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, results.length]);
 
   const openTask = (t: Task) => {
     onNavigate(t.list && t.list !== "default" ? `list:${t.list}` : "all");
@@ -171,6 +180,7 @@ export default function CommandPalette({
               <div
                 key={t.id}
                 id={`command-palette-option-${t.id}`}
+                ref={i === activeIndex ? activeRef : null}
                 role="option"
                 aria-selected={i === activeIndex}
                 className={cn(

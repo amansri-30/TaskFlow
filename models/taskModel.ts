@@ -100,5 +100,31 @@ const TaskSchema = new mongoose.Schema({
   },
 });
 
+// A recurring chain spawns its next occurrence by checking for an existing one
+// and then inserting. Those two steps are not atomic, so two completions of the
+// same task arriving together — a second tab, or a retried PATCH — both passed
+// the check and both inserted, leaving the chain forked with a duplicate
+// occurrence that the reopen cleanup then deletes as an "orphan".
+//
+// This index makes the invariant enforceable rather than merely intended: at
+// most one non-trashed occurrence per (chain, due date). It is partial on
+// `baseTaskId` being set, so ordinary hand-made tasks are unaffected and the
+// many rows sharing a null `scheduledAt` never collide.
+TaskSchema.index(
+  { user: 1, baseTaskId: 1, scheduledAt: 1 },
+  {
+    unique: true,
+    // Partial on both fields being set. `$type` rather than `$ne: null` so the
+    // filter does not depend on query semantics that changed between MongoDB
+    // versions. Ordinary tasks carry baseTaskId: null, and every dateless task
+    // shares scheduledAt: null, so without the partial filter this unique index
+    // would collide across a user's own unrelated rows.
+    partialFilterExpression: {
+      baseTaskId: { $type: "objectId" },
+      scheduledAt: { $type: "date" },
+    },
+  }
+);
+
 const Task = mongoose.models.Task || mongoose.model("Task", TaskSchema);
 export default Task;

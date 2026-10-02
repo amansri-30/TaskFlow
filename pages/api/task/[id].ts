@@ -159,7 +159,13 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         task.remindedAt = null;
       }
       if (monthlyDay !== undefined) {
-        if (recurrence === "monthly" && Number.isInteger(monthlyDay)) {
+        // `task.recurrence`, not the request body's `recurrence`: the body field
+        // is undefined on any edit that doesn't restate it, so an already-monthly
+        // task sent a bare `monthlyDay` fell into the else branch and had the
+        // value silently discarded in favour of one re-derived from the due
+        // date. The anchor is a property of the saved task, so compare against
+        // what was actually just assigned above.
+        if (task.recurrence === "monthly" && Number.isInteger(monthlyDay)) {
           task.monthlyDay = Math.min(31, Math.max(1, monthlyDay));
         } else {
           setMonthlyDay(task, dueDate);
@@ -399,7 +405,6 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
               user: task.user,
               baseTaskId: task._id,
               scheduledAt: nextDue,
-              trashed: { $ne: true },
             });
             if (!existing) {
               // Carry the reminder onto the next occurrence, but only when the
@@ -414,23 +419,39 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                 reminder && leadMs > 0
                   ? new Date(nextDue.getTime() - leadMs)
                   : null;
-              nextTask = await Task.create({
-                title: task.title,
-                description: task.description,
-                notes: task.notes || "",
-                list: task.list,
-                priority: task.priority,
-                user: task.user,
-                recurrence: task.recurrence,
-                scheduledAt: nextDue,
-                remindAt: nextRemindAt,
-                remindedAt: null,
-                monthlyDay: task.monthlyDay,
-                tags: task.tags || [],
-                subtasks: task.subtasks || [],
-                pinned: task.pinned,
-                baseTaskId: task._id,
-              });
+              try {
+                nextTask = await Task.create({
+                  title: task.title,
+                  description: task.description,
+                  notes: task.notes || "",
+                  list: task.list,
+                  priority: task.priority,
+                  user: task.user,
+                  recurrence: task.recurrence,
+                  scheduledAt: nextDue,
+                  remindAt: nextRemindAt,
+                  remindedAt: null,
+                  monthlyDay: task.monthlyDay,
+                  tags: task.tags || [],
+                  subtasks: task.subtasks || [],
+                  pinned: task.pinned,
+                  baseTaskId: task._id,
+                });
+              } catch (spawnError: any) {
+                // The findOne above is a check, not a lock, so a concurrent
+                // completion can win the race and insert the same occurrence
+                // first. The partial unique index on (baseTaskId, scheduledAt)
+                // turns that into a duplicate-key error instead of a silently
+                // forked chain — and because the winner already created the
+                // occurrence we want, losing the race is a success, not a
+                // failure. Anything else is a genuine failure and propagates.
+                if (spawnError?.code !== 11000) throw spawnError;
+                nextTask = await Task.findOne({
+                  user: task.user,
+                  baseTaskId: task._id,
+                  scheduledAt: nextDue,
+                });
+              }
             }
           }
         }

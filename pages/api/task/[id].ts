@@ -115,7 +115,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
       }
       if (description !== undefined) task.description = String(description).slice(0, 100);
       if (notes !== undefined) task.notes = String(notes).slice(0, 4000);
-      if (list !== undefined) task.list = list;
+      if (typeof list === "string" && list.trim()) task.list = list.trim().slice(0, 50);
       if (priority !== undefined) task.priority = priority;
       if (dueDate !== undefined) {
         if (dueDate) {
@@ -177,7 +177,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, snooze, reminderFired, deferTo, scannedRemindAt } = req.body;
+      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -354,7 +354,33 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         });
       }
 
+      // Field-scoped tag write, so bulk tagging from the batch toolbar can reuse
+      // this endpoint and the client's PATCH-shaped undo entries can replay it.
+      // `tags` replaces the whole set rather than merging, which is what lets a
+      // single-tag removal express itself as "here is the set minus one".
+      if (Array.isArray(tags)) {
+        task.tags = normalizeTags(tags);
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task tags updated", {
+          task: mapTask(task),
+        });
+      }
+
       if (typeof completed === "boolean") {
+        // A completion is not idempotent by accident, so make it explicit. This
+        // branch derives the next occurrence from `new Date()` when the task has
+        // no future due date, which is millisecond-precise and different on every
+        // request — so a retried PATCH, a double-click, or a second tab all passed
+        // the dedupe below and each inserted an occurrence, forking the chain
+        // with phantom future tasks. Completing an already-completed task is
+        // therefore a no-op rather than a second spawn.
+        if (task.completed === completed) {
+          return handleRes(res, 200, true, "Task already up to date", {
+            task: mapTask(task),
+          });
+        }
+
         task.completed = completed;
         task.completedAt = completed ? new Date() : null;
         task.updatedAt = new Date();
@@ -396,6 +422,12 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             scheduled && scheduled.getTime() > now.getTime() ? scheduled : now;
           const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
           if (nextDue) {
+            // Drop sub-second precision so two requests completing the same task
+            // within one second derive an identical nextDue and collide on the
+            // partial unique index below, instead of each spawning an occurrence
+            // that differs only in milliseconds. A todo due date has no use for
+            // millisecond accuracy, and the dedupe lookup is exact-match.
+            nextDue.setMilliseconds(0);
             // Guard against a duplicate occurrence for the SAME chain only.
             // Dedupe on baseTaskId (the chain this task belongs to), never on
             // title+list: two independent tasks that merely share a title

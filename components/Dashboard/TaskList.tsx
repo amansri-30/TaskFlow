@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "../ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -40,6 +41,9 @@ Undo2,
   Bell,
   BellRing,
   CalendarClock,
+  Hash,
+  Plus,
+  Minus,
   X,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
@@ -218,6 +222,11 @@ export default function TaskList({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
+  // Bulk-tag picker. The draft is held locally so Enter can commit it without
+  // the popover stealing the keystroke, and reset on close so a half-typed tag
+  // never reappears on the next open.
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [tagDraft, setTagDraft] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const pendingRef = useRef<Set<string>>(new Set());
   const [pendingOps, setPendingOps] = useState<Set<string>>(new Set());
@@ -257,6 +266,35 @@ export default function TaskList({
   const selectedIncomplete = selectedTasks.filter((t) => !t.completed);
   const selectedCompleted = selectedTasks.filter((t) => t.completed);
 
+  // Roll back only the fields this handler owns. Restoring the whole pre-batch
+  // task also reverts edits the server accepted while the batch was in flight --
+  // a subtask tick, a pin, a defer landing on the same row -- so a row that
+  // merely failed to complete would silently lose them and disagree with the
+  // server until the next refetch. This is the field scoping the single-row
+  // handlers already use; a full snapshot stays correct only for a failed
+  // delete, where the removed row itself is what needs restoring.
+  function rollbackFields(
+    previous: Map<string, Task>,
+    failedIds: Set<string>,
+    fields: (keyof Task)[]
+  ) {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (!failedIds.has(t.id)) return t;
+        const before = previous.get(t.id);
+        if (!before) return t;
+        const restored: Task = { ...t };
+        for (const field of fields) {
+          // Assigned one key at a time through Object.assign rather than by
+          // indexing `restored` directly, which TypeScript refuses for a union
+          // of keys. This is a plain value copy, not a cast.
+          Object.assign(restored, { [field]: before[field] });
+        }
+        return restored;
+      })
+    );
+  }
+
   const handleBatchComplete = async () => {
     if (selectedIncomplete.length === 0) return;
     const previous = new Map(tasks.map((t) => [t.id, t]));
@@ -285,16 +323,14 @@ export default function TaskList({
       // Only roll back the tasks that actually failed; keep the ones that
       // succeeded on the server so the UI never shows stale state.
       const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
+      rollbackFields(previous, failedIds, ["completed", "completedAt"]);
       toast.error(`Failed to complete ${failed.length} of ${target.length} tasks`);
     } else {
       toast.success(`Completed ${target.length} task${target.length > 1 ? "s" : ""}`);
     }
     // Always re-fetch after recurring tasks are involved — even on partial
     // failure the server may have created next occurrences we haven't seen.
-if (hadRecurring && succeededCount > 0) {
+    if (hadRecurring && succeededCount > 0) {
       await refreshSilently();
       toast.success("Next occurrences scheduled for repeating tasks");
     }
@@ -345,24 +381,36 @@ if (hadRecurring && succeededCount > 0) {
     });
     if (removedIds.size > 0) {
       setTasks((prev) => prev.filter((t) => !removedIds.has(t.id)));
+      // Prune the selection as well. The removed occurrences can well be part of
+      // it -- select a daily chain together with its spawned occurrence, reopen
+      // the parent, and the server deletes the child -- leaving the toolbar
+      // counting tasks that no longer exist, so a batch Delete would open a
+      // confirm dialog previewing more rows than it would actually trash.
+      setSelectedIds((prev) =>
+        new Set(Array.from(prev).filter((id) => !removedIds.has(id)))
+      );
     }
+    const reopened = target.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
-toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
-      return;
+      rollbackFields(previous, failedIds, ["completed", "completedAt"]);
+      toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
+    } else {
+      toast.success(`Reopened ${target.length} task${target.length > 1 ? "s" : ""}`);
     }
-    pushUndo({
-      kind: "edit",
-      label: `Undo reopen (${plural(target.length, "task")})`,
-      prev: target.map((t) => ({
-        id: t.id,
-        patch: { completed: true },
-      })),
-    });
-    toast.success(`Reopened ${target.length} task${target.length > 1 ? "s" : ""}`);
+    // Recorded on partial failure too. Bailing out before this left the rows the
+    // server did accept with no way back, while the Undo button still labelled
+    // the previous unrelated action, so pressing it undid the wrong operation.
+    if (reopened.length > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `Undo reopen (${plural(reopened.length, "task")})`,
+        prev: reopened.map((t) => ({
+          id: t.id,
+          patch: { completed: true },
+        })),
+      });
+    }
   };
 
   const handleBatchSetPriority = async (
@@ -379,27 +427,31 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
       target.map((t) => axios.patch(`/api/task/${t.id}`, { priority }))
     );
     const failed = target.filter((_, i) => results[i].status === "rejected");
+    const fulfilled = target.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
+      rollbackFields(previous, failedIds, ["priority"]);
       toast.error(`Failed to update priority for ${failed.length} of ${target.length} tasks`);
-      return;
+    } else {
+      toast.success(`Priority set to ${priority} for ${target.length} task${target.length > 1 ? "s" : ""}`);
     }
-    // Only the rows the server actually accepted are undoable.
-    pushUndo({
-      kind: "edit",
-      label: `Undo priority change (${plural(target.length, "task")})`,
-      prev: target.map((t) => ({
-        id: t.id,
-        // The type marks priority optional while the schema defaults it, so an
-        // absent value has to fall back to the schema default: falling back to
-        // the just-written value would make the undo a silent no-op.
-        patch: { priority: previous.get(t.id)?.priority ?? "medium" },
-      })),
-    });
-    toast.success(`Priority set to ${priority} for ${target.length} task${target.length > 1 ? "s" : ""}`);
+    // Recorded even when the batch partly failed: those rows are persisted, and
+    // returning here left them with no way back while the Undo button kept
+    // pointing at the previous, unrelated action.
+    if (fulfilled.length > 0) {
+      // Only the rows the server actually accepted are undoable.
+      pushUndo({
+        kind: "edit",
+        label: `Undo priority change (${plural(fulfilled.length, "task")})`,
+        prev: fulfilled.map((t) => ({
+          id: t.id,
+          // The type marks priority optional while the schema defaults it, so an
+          // absent value has to fall back to the schema default: falling back to
+          // the just-written value would make the undo a silent no-op.
+          patch: { priority: previous.get(t.id)?.priority ?? "medium" },
+        })),
+      });
+    }
   };
 
   const handleBatchSetList = async (list: string) => {
@@ -414,25 +466,119 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
       target.map((t) => axios.patch(`/api/task/${t.id}`, { list }))
     );
     const failed = target.filter((_, i) => results[i].status === "rejected");
+    const fulfilled = target.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
+      rollbackFields(previous, failedIds, ["list"]);
       toast.error(`Failed to move ${failed.length} of ${target.length} tasks`);
+    } else {
+      toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to "${list}"`);
+    }
+    // Same reasoning as batch priority: a partial failure still persisted these
+    // rows, so it still needs a way back.
+    if (fulfilled.length > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `Undo move (${plural(fulfilled.length, "task")})`,
+        prev: fulfilled.map((t) => ({
+          id: t.id,
+          // Same schema-default reasoning as priority: `list` is required in the
+          // type but defaults in the model.
+          patch: { list: previous.get(t.id)?.list ?? "default" },
+        })),
+      });
+    }
+  };
+
+  // Tags were the one batchable field the toolbar had no control for, even though
+  // they are how every smart view is filtered: bulk-setting priority or list left
+  // no way to label 40 selected tasks "#urgent" without opening 40 dialogs.
+  //
+  // Add and remove rather than "set", because a tag set is additive in practice:
+  // the intent is "these are urgent too", not "replace every tag on these rows".
+  // Both go out as one field-scoped PATCH of the resulting array, which is what
+  // makes them undoable by the same mechanism as every other batch action.
+  const handleBatchTag = async (rawTag: string, mode: "add" | "remove") => {
+    if (selectedTasks.length === 0) return;
+    // Canonicalize through the same helper the server uses, so the membership
+    // test below compares against the form that would actually be stored.
+    // Without this, a tag typed as "Work Later" reads as absent from a task
+    // tagged "work-later" and gets appended as a second, duplicate entry.
+    const tag = normalizeTags([rawTag])[0];
+    if (!tag) {
+      toast.error("That tag has no usable characters");
       return;
     }
-    pushUndo({
-      kind: "edit",
-      label: `Undo move (${plural(target.length, "task")})`,
-      prev: target.map((t) => ({
-        id: t.id,
-        // Same schema-default reasoning as priority: `list` is required in the
-        // type but defaults in the model.
-        patch: { list: previous.get(t.id)?.list ?? "default" },
-      })),
-    });
-    toast.success(`Moved ${target.length} task${target.length > 1 ? "s" : ""} to "${list}"`);
+    const previous = new Map(tasks.map((t) => [t.id, t]));
+    const target = selectedTasks;
+    // Tasks whose tag set would not actually change, and tasks that cannot take
+    // the change at all. Skipping them matters twice over: a no-op PATCH would add
+    // a row to the undo history that replays into nothing, and a task already at
+    // the 5-tag cap has the new tag silently dropped server-side, leaving the
+    // optimistic row showing six tags until the next refetch corrected it.
+    const atCap = new Set<string>();
+    const changed: { id: string; next: string[] }[] = [];
+    for (const t of target) {
+      const current = normalizeTags(t.tags);
+      const has = current.includes(tag);
+      if (mode === "add") {
+        if (has) continue;
+        if (current.length >= 5) {
+          atCap.add(t.id);
+          continue;
+        }
+        changed.push({ id: t.id, next: [...current, tag] });
+      } else {
+        if (!has) continue;
+        changed.push({ id: t.id, next: current.filter((x) => x !== tag) });
+      }
+    }
+    if (changed.length === 0) {
+      toast.error(
+        atCap.size > 0
+          ? `Every selected task already has 5 tags`
+          : `No selected task ${mode === "add" ? "is missing" : "has"} #${tag}`
+      );
+      return;
+    }
+    const byId = new Map(changed.map((c) => [c.id, c.next]));
+    setTasks((prev) =>
+      prev.map((t) => {
+        const next = byId.get(t.id);
+        return next ? { ...t, tags: next } : t;
+      })
+    );
+    const results = await Promise.allSettled(
+      changed.map((c) => axios.patch(`/api/task/${c.id}`, { tags: c.next }))
+    );
+    const failed = changed.filter((_, i) => results[i].status === "rejected");
+    const succeeded = changed.filter((_, i) => results[i].status === "fulfilled");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((c) => c.id));
+      rollbackFields(previous, failedIds, ["tags"]);
+      toast.error(`Failed to tag ${failed.length} of ${changed.length} task${changed.length > 1 ? "s" : ""}`);
+    }
+    if (succeeded.length > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `${mode === "add" ? "Undo tag" : "Undo untag"} (${plural(succeeded.length, "task")})`,
+        prev: succeeded.map((c) => ({
+          id: c.id,
+          // `tags` replaces the whole set, so the pre-batch value is exactly what
+          // restores it, and stays correct however the rows change in between.
+          patch: { tags: previous.get(c.id)?.tags ?? [] },
+        })),
+      });
+      toast.success(
+        mode === "add"
+          ? `Tagged ${plural(succeeded.length, "task")} #${tag}`
+          : `Removed #${tag} from ${plural(succeeded.length, "task")}`
+      );
+    }
+    // Rows skipped for the 5-tag cap are reported rather than silently ignored.
+    if (atCap.size > 0) {
+      toast.error(`${plural(atCap.size, "task")} skipped — already at the 5-tag limit`);
+    }
   };
 
   const handleBatchDelete = async () => {
@@ -1366,7 +1512,7 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
   };
 
   /**
-   * Replay one batch action, and every action recorded after it.
+   * Replay the chosen batch action, discarding it and anything recorded after it.
    *
    * Entries are consumed newest-first as a LIFO stack rather than
    * independently: two actions can touch the same field, so replaying an older
@@ -1386,6 +1532,17 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
         ? undoStack.length - 1
         : Math.min(Math.max(index, 0), undoStack.length - 1);
     const entry = undoStack[target];
+    // Consumed by identity rather than by the render-time index. The replay
+    // below is awaited and the batch toolbar plus "Complete all" stay live for
+    // its whole duration, so another action can be recorded while the requests
+    // are in flight. Slicing at the pre-await `target` would drop that brand-new
+    // entry along with the replayed one, leaving an action the user was just
+    // told succeeded with no way back.
+    const consumedAt = entry.at;
+    const dropConsumed = (prev: UndoEntry[]) => {
+      const at = prev.findIndex((e) => e.at === consumedAt);
+      return at === -1 ? prev : prev.slice(0, at);
+    };
     setUndoBusy(true);
     try {
       const calls: { id: string; patch: Record<string, unknown> }[] =
@@ -1394,7 +1551,7 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
           : entry.prev;
       if (calls.length === 0) {
         // Nothing to replay: drop this entry too so the stack can't wedge.
-        setUndoStack((prev) => prev.slice(0, target));
+        setUndoStack(dropConsumed);
         return;
       }
       const results = await Promise.allSettled(
@@ -1405,7 +1562,7 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
       // leaving the entry would offer to replay it and revert them a second
       // time. A failure is reported rather than hidden, and the refetch below
       // shows the true state.
-      setUndoStack((prev) => prev.slice(0, target));
+      setUndoStack(dropConsumed);
       if (ok < calls.length) {
         toast.error(
           `Undone ${ok} of ${calls.length} — ${calls.length - ok} could not be restored`
@@ -1642,14 +1799,12 @@ toast.error(`Failed to reopen ${failed.length} of ${target.length} tasks`);
     const succeededCount = pending.length - failed.length;
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
+      rollbackFields(previous, failedIds, ["completed", "completedAt"]);
       toast.error(`Failed to complete ${failed.length} of ${pending.length} tasks`);
     } else {
       toast.success(`${pending.length} task${pending.length > 1 ? "s" : ""} completed`);
     }
-if (hadRecurring && succeededCount > 0) {
+    if (hadRecurring && succeededCount > 0) {
       await refreshSilently();
       toast.success("Next occurrences scheduled for repeating tasks");
     }
@@ -2181,10 +2336,105 @@ if (hadRecurring && succeededCount > 0) {
                               {l}
                             </SelectItem>
                           ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+</SelectContent>
+                    </Select>
+                  </div>
                   )}
+                  <div className="flex items-center gap-1.5">
+                    <Hash className="h-4 w-4 text-muted-foreground" />
+                    <Popover
+                      open={tagPickerOpen}
+                      onOpenChange={(o) => {
+                        setTagPickerOpen(o);
+                        if (!o) setTagDraft("");
+                      }}
+                    >
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 min-w-[100px]"
+                          disabled={selectedTasks.length === 0}
+                          aria-label="Tag selected tasks"
+                        >
+                          Tags
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-64 p-2">
+                        <div className="flex gap-1.5">
+                          <Input
+                            value={tagDraft}
+                            placeholder="New tag"
+                            className="h-8"
+                            aria-label="New tag name"
+                            onChange={(e) => setTagDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== "Enter") return;
+                              e.preventDefault();
+                              const tag = normalizeTags([tagDraft])[0];
+                              if (!tag) return;
+                              handleBatchTag(tag, "add");
+                              setTagDraft("");
+                            }}
+                          />
+                          <Button
+                            size="sm"
+                            className="h-8"
+                            aria-label="Add this tag to selected tasks"
+                            disabled={!normalizeTags([tagDraft])[0]}
+                            onClick={() => {
+                              const tag = normalizeTags([tagDraft])[0];
+                              if (!tag) return;
+                              handleBatchTag(tag, "add");
+                              setTagDraft("");
+                            }}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        {tagChips.length > 0 ? (
+                          <div className="mt-2 max-h-56 overflow-y-auto">
+                            {tagChips.map(([name, count]) => (
+                              <div
+                                key={name}
+                                className="flex items-center justify-between gap-1 rounded px-1 py-0.5 hover:bg-accent"
+                              >
+                                <span className="truncate text-sm">
+                                  #{name} ({count})
+                                </span>
+                                <span className="flex shrink-0 gap-0.5">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0"
+                                    aria-label={`Add #${name} to selected`}
+                                    title={`Add #${name}`}
+                                    onClick={() => handleBatchTag(name, "add")}
+                                  >
+                                    <Plus className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0"
+                                    aria-label={`Remove #${name} from selected`}
+                                    title={`Remove #${name}`}
+                                    onClick={() => handleBatchTag(name, "remove")}
+                                  >
+                                    <Minus className="h-3.5 w-3.5" />
+                                  </Button>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 px-1 text-xs text-muted-foreground">
+                            No tags yet. Type one above.
+                          </p>
+                        )}
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                   <div className="flex items-center gap-1.5">
                     <CalendarClock className="h-4 w-4 text-muted-foreground" />
                     <Select

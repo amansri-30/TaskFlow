@@ -94,6 +94,13 @@ const newTask = catchAsyncError(
     const rawReminder = remindAt ? new Date(remindAt) : null;
     const resolvedRemindAt =
       rawReminder && !isNaN(rawReminder.getTime()) ? rawReminder : null;
+    // The edit path rejects a reminder that already elapsed, on the grounds that
+    // it would fire on the very next client scan for a task the user has never
+    // seen. Creation skipped that check, so the same reminder was accepted here
+    // and stored already-due. Reject it identically instead of storing it.
+    if (resolvedRemindAt && resolvedRemindAt.getTime() <= Date.now()) {
+      return handleRes(res, 400, false, "Reminder must be in the future");
+    }
 
     await Task.create({
       title: normalizedTitle,

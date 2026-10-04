@@ -206,7 +206,47 @@ export default function TaskList({
    * back. So the history is a LIFO stack: Cmd/Ctrl+Z or the button pops the
    * newest entry, and the history menu can replay any one of them.
    */
-  const [undoStack, setUndoStack] = useState<UndoEntry[]>([]);
+  /**
+ * The stack survives a refresh, in `sessionStorage` rather than
+ * `localStorage`: an undo history is a short-lived safety net for the action you
+ * just took, not a permanent record. Reloading is exactly the moment a bulk
+ * mistake turns expensive — the button you mis-clicked is still sitting right
+ * there under your finger — but a history that reappeared tomorrow morning would
+ * be noise. `sessionStorage` outlives a refresh and dies with the tab.
+ */
+const UNDO_STORAGE_KEY = "taskflow:undo-stack";
+
+/**
+ * Read a persisted stack, defensively.
+ *
+ * This is untrusted input: it is hand-editable and survives across app versions
+ * that may change the entry shape, so a malformed value has to degrade to "no
+ * history" rather than throw during render and blank the dashboard. Entries are
+ * filtered on the fields the replay actually reads and capped again, so neither
+ * a corrupt store nor a hand-inserted 10,000-entry array can blow up the menu.
+ */
+function loadUndoStack(): UndoEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(UNDO_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (e): e is UndoEntry =>
+          !!e &&
+          typeof e === "object" &&
+          (e.kind === "delete" || e.kind === "edit") &&
+          typeof e.at === "number"
+      )
+      .slice(-UNDO_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   const [undoBusy, setUndoBusy] = useState(false);
   const [undoMenuOpen, setUndoMenuOpen] = useState(false);
   /**
@@ -219,6 +259,19 @@ export default function TaskList({
         -UNDO_HISTORY_LIMIT
       )
     );
+  // Mirror the stack into the tab's storage. Failures are deliberately ignored:
+  // a full quota or a browser with storage disabled costs the refresh-survival
+  // and nothing else, since `undoStack` is still the live source of truth.
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(
+        UNDO_STORAGE_KEY,
+        JSON.stringify(undoStack)
+      );
+    } catch {
+      // ignore - undo still works for this session
+    }
+  }, [undoStack]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
@@ -653,6 +706,36 @@ export default function TaskList({
       const response = await axios.get("/api/getalltasks");
       setTasks(response.data.tasks || []);
       setTrashed(response.data.trashed || []);
+      // Prune restored entries whose rows are gone for good. A persisted stack
+      // can outlive the tasks it refers to: a task deleted on another tab, or a
+      // history left behind by a different account in the same tab. Replaying
+      // those would fire doomed requests and report a shortfall the user cannot
+      // act on. Trashed rows are still live rows -- they are what a `delete`
+      // entry restores -- so they count as present.
+      const live = new Set<string>([
+        ...((response.data.tasks || []) as Task[]).map((t) => t.id),
+        ...((response.data.trashed || []) as Task[]).map((t) => t.id),
+      ]);
+      setUndoStack((prev) =>
+        prev
+          .map((entry) => {
+            if (entry.kind === "delete") {
+              const ids = entry.ids.filter((id) => live.has(id));
+              if (ids.length === entry.ids.length) return entry;
+              return ids.length
+                ? {
+                    ...entry,
+                    ids,
+                    label: `Undo delete (${plural(ids.length, "task")})`,
+                  }
+                : null;
+            }
+            const prev_ = entry.prev.filter((p) => live.has(p.id));
+            if (prev_.length === entry.prev.length) return entry;
+            return prev_.length ? { ...entry, prev: prev_ } : null;
+          })
+          .filter((entry): entry is UndoEntry => entry !== null)
+      );
     } catch (err: any) {
       if (axios.isAxiosError(err) && err.response?.status === 401) {
         dispatch(userActions.resetUser());
@@ -1285,6 +1368,26 @@ export default function TaskList({
     );
   };
 
+  /**
+ * The day-of-month a reschedule lands on, read off the user's own calendar.
+ *
+ * A monthly task stores `monthlyDay` as its anchor, and the server can only
+ * recover it from the instant with `new Date(...).getDate()` -- which resolves
+ * in the *server's* timezone. East of UTC that is already tomorrow: moving a
+ * task to the 15th at 00:00 local sends an instant that is still the 14th
+ * server-side, so the anchor became 14. The due date kept rendering correctly,
+ * which hid the damage until the task completed and every occurrence after it
+ * spawned a day early. Sending the day explicitly is the same contract
+ * `newtask` has always used.
+ *
+ * Only monthly tasks carry an anchor, and a cleared date has no anchor to set.
+ */
+function deferAnchor(task: Task, dueIso: string | null) {
+  if (!dueIso || task.recurrence !== "monthly") return {};
+  const day = new Date(dueIso).getDate();
+  return Number.isInteger(day) ? { monthlyDay: day } : {};
+}
+
   // Reschedule a single task. `null` clears the due date entirely.
   const handleDefer = async (task: Task, dueIso: string | null) => {
     if (!beginOp(task.id)) {
@@ -1302,6 +1405,7 @@ export default function TaskList({
     try {
       const response = await axios.patch(`/api/task/${task.id}`, {
         deferTo: dueIso,
+        ...deferAnchor(task, dueIso),
       });
       const updated = response.data?.task as Task | null | undefined;
       if (updated) {
@@ -1342,7 +1446,12 @@ export default function TaskList({
       )
     );
     const results = await Promise.allSettled(
-      target.map((t) => axios.patch(`/api/task/${t.id}`, { deferTo: dueIso }))
+      target.map((t) =>
+        axios.patch(`/api/task/${t.id}`, {
+          deferTo: dueIso,
+          ...deferAnchor(t, dueIso),
+        })
+      )
     );
     // Reconcile every success from its own response. The server owns the
     // reminder lead time and the monthly anchor, so the optimistic write left
@@ -1390,8 +1499,10 @@ export default function TaskList({
     applyMovedTasks(moved);
     // Each row replays its OWN previous date — a shared date would collapse a
     // mixed-date selection onto one day. `deferTo: null` restores "no due
-    // date", and because the server re-anchors monthlyDay from the date it is
-    // given, restoring the original date also restores the original anchor.
+    // date". The anchor travels with it, because the server re-derives
+    // `monthlyDay` from whatever date it is handed: replaying the instant
+    // alone would leave the row's day-of-month disagreeing with its displayed
+    // date, and the next occurrence would still spawn on the wrong day.
     // Rows the server rejected are excluded: they never changed, so replaying
     // them would only risk overwriting a concurrent edit.
     const undoable = target.filter((t) => !failedIds.has(t.id));
@@ -1399,10 +1510,13 @@ export default function TaskList({
       pushUndo({
         kind: "edit",
         label: `Undo reschedule (${plural(undoable.length, "task")})`,
-        prev: undoable.map((t) => ({
-          id: t.id,
-          patch: { deferTo: previous.get(t.id)?.scheduledAt ?? null },
-        })),
+        prev: undoable.map((t) => {
+          const was = previous.get(t.id)?.scheduledAt ?? null;
+          return {
+            id: t.id,
+            patch: { deferTo: was, ...deferAnchor(t, was) },
+          };
+        }),
       });
     }
   };
@@ -1540,8 +1654,16 @@ export default function TaskList({
     // told succeeded with no way back.
     const consumedAt = entry.at;
     const dropConsumed = (prev: UndoEntry[]) => {
-      const at = prev.findIndex((e) => e.at === consumedAt);
-      return at === -1 ? prev : prev.slice(0, at);
+      // Identity first. `at` is a millisecond timestamp, so two entries pushed
+      // in the same tick are indistinguishable by it, and matching the wrong one
+      // would truncate the stack at the wrong place. The live array still holds
+      // this exact object; entries appended during the await are new objects
+      // after it, which is exactly the boundary wanted here.
+      const at = prev.indexOf(entry);
+      if (at !== -1) return prev.slice(0, at);
+      // Only if the entry itself was replaced mid-flight (pruned, or relabelled).
+      const byAt = prev.findIndex((e) => e.at === consumedAt);
+      return byAt === -1 ? prev : prev.slice(0, byAt);
     };
     setUndoBusy(true);
     try {
@@ -2958,6 +3080,15 @@ function TaskItem({
   const addSubtask = () => {
     const text = newSubtask.trim().slice(0, 200);
     if (!text) return;
+    // The server caps a task at 100 subtasks and silently drops the overflow.
+    // Appending optimistically anyway meant the row flashed up and then vanished
+    // once the reconciled list came back, taking the typed text with it and
+    // leaving no indication of why. Refuse it here with a reason, and keep the
+    // text in the box so nothing is lost.
+    if (subtasks.length >= 100) {
+      toast.error("This task already has the maximum of 100 subtasks");
+      return;
+    }
     onSubtasks(task, [
       ...subtasks,
       {

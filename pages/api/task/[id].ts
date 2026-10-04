@@ -39,9 +39,20 @@ const mapTask = (t: any) => ({
   updatedAt: t.updatedAt,
 });
 
-const setMonthlyDay = (task: any, dateValue: unknown) => {
+const setMonthlyDay = (task: any, dateValue: unknown, clientDay?: unknown) => {
   if (task.recurrence !== "monthly") {
     task.monthlyDay = null;
+    return;
+  }
+  // Prefer the day-of-month the client read off the user's own calendar. An
+  // absolute instant cannot answer this question: `getDate()` resolves in the
+  // server's timezone, so a user east of UTC rescheduling to the 15th at
+  // 00:00 local sent an instant that is still the 14th in UTC, and the anchor
+  // was silently stored as 14. The due date still rendered correctly, so nothing
+  // looked wrong -- until the task completed and every future occurrence spawned
+  // a day early. `newtask` already takes this field for exactly this reason.
+  if (Number.isInteger(clientDay)) {
+    task.monthlyDay = Math.min(31, Math.max(1, clientDay as number));
     return;
   }
   const source = dateValue ?? task.scheduledAt ?? null;
@@ -177,7 +188,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt } = req.body;
+      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt, monthlyDay } = req.body;
 
       if (restore === true) {
         task.trashed = false;
@@ -301,7 +312,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           moveDueDate(task, parsed);
           // A moved monthly task must re-anchor, or the next completion spawns
           // on the old day-of-month.
-          setMonthlyDay(task, parsed);
+          setMonthlyDay(task, parsed, monthlyDay);
           // A pending occurrence of a recurring chain still sits on the old
           // date. Move it with the parent — including its reminder, so the
           // lead time survives instead of drifting a week every defer.
@@ -310,7 +321,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             // Re-anchor the child too. Moving it to the 20th while it kept
             // monthlyDay 15 made the next completion spawn back on the old
             // day, so the chain reverted to the pre-move anchor.
-            setMonthlyDay(child, parsed);
+            setMonthlyDay(child, parsed, monthlyDay);
             child.updatedAt = new Date();
             await child.save();
             movedTasks.push(mapTask(child));

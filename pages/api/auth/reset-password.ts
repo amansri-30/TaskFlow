@@ -27,20 +27,33 @@ const resetPassword = catchAsyncError(
       .update(token.trim())
       .digest("hex");
 
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpire: { $gt: new Date() },
-    }).select("+password +resetPasswordToken");
+    // Claim the token with a single conditional update rather than reading the
+    // user and saving them back. The previous find-then-save made "single use"
+    // true only by luck of timing: two parallel requests carrying the same valid
+    // token both matched the read before either write landed, so both answered
+    // "Password reset successfully" while the second silently overwrote the
+    // password the first caller believed it had set. Matching the token in the
+    // filter makes exactly one of them win; the loser resolves to null and is
+    // told the token is invalid, which is what it is by then.
+    const updated = await User.findOneAndUpdate(
+      {
+        resetPasswordToken: hashedToken,
+        resetPasswordExpire: { $gt: new Date() },
+      },
+      {
+        $set: {
+          password: await bcrypt.hash(password, 10),
+          passwordChangedAt: new Date(),
+        },
+        // A real $unset, so the token cannot be replayed afterwards.
+        $unset: { resetPasswordToken: 1, resetPasswordExpire: 1 },
+      },
+      { new: true }
+    );
 
-    if (!user) {
+    if (!updated) {
       return handleRes(res, 400, false, "Reset token is invalid or has expired");
     }
-
-    user.password = await bcrypt.hash(password, 10);
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
-    user.passwordChangedAt = new Date();
-    await user.save();
 
     handleRes(res, 200, true, "Password reset successfully. You can now log in.");
   }

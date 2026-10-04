@@ -1098,25 +1098,26 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     return true;
   };
 
-  const filtered = tasks.filter((t) => {
-    if (!matchesFilter(t)) return false;
-    if (!term) return true;
-    return (
-      t.title.toLowerCase().includes(term) ||
-      (t.description || "").toLowerCase().includes(term) ||
-      (t.notes || "").toLowerCase().includes(term)
-    );
-  });
+// Free-text search. Tags and subtasks were the two places a task's text could
+// live without being findable: searching "urgent" returned nothing while the
+// chip existed one click away, and "call the dentist" was invisible even though
+// the line was rendered right on the row. Both are now matched, and the matcher
+// lives here rather than being inlined twice, because the active and trash
+// branches had drifted into two near-identical copies of it.
+const matchesSearch = (t: Task) => {
+  if (!term) return true;
+  if (t.title.toLowerCase().includes(term)) return true;
+  if ((t.description || "").toLowerCase().includes(term)) return true;
+  if ((t.notes || "").toLowerCase().includes(term)) return true;
+  if ((t.tags || []).some((tag) => tag.toLowerCase().includes(term))) return true;
+  return (t.subtasks || []).some((s) =>
+    s.text.toLowerCase().includes(term)
+  );
+};
 
-  const trashedFiltered = trashView
-    ? trashed.filter((t) =>
-        term
-          ? t.title.toLowerCase().includes(term) ||
-            (t.description || "").toLowerCase().includes(term) ||
-            (t.notes || "").toLowerCase().includes(term)
-          : true
-      )
-    : [];
+const filtered = tasks.filter((t) => matchesFilter(t) && matchesSearch(t));
+
+const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : [];
 
   const incomplete = filtered.filter((t) => !t.completed);
   const pinFirst = (a: Task, b: Task) =>

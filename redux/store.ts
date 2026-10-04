@@ -5,7 +5,14 @@ import storage from 'redux-persist/lib/storage';
 
 const persistConfig = {
   key: 'root',
-  storage
+  storage,
+  // The whole `user` slice was being written to localStorage, including `error`.
+  // A rejected sign-up sets that field and nothing ever clears it, and /signup
+  // toasts `error` from a mount effect -- so reloading the page after a failed
+  // attempt re-fired "Email already registered" for a submission that no longer
+  // existed on screen. Transient request state has no business surviving a
+  // reload; only the signed-in identity does.
+  blacklist: ['error', 'message', 'isLoading'],
 }
 
 const rootReducer = combineReducers({

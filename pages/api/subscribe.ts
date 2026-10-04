@@ -18,12 +18,27 @@ const subscribeHandler = catchAsyncError(
 
     await connectDB();
 
-    const existing = await Subscriber.findOne({ email: email.trim().toLowerCase() });
+    const normalized = email.trim().toLowerCase();
+    // Checked only to produce a friendly message. It is not the enforcement
+    // mechanism -- `findOne`-then-`create` is a TOCTOU, and when several
+    // identical requests arrive together they all pass the check and the
+    // duplicates surface as a raw "That value is already in use." from
+    // catchAsyncError, which reads like a server fault. The unique index on the
+    // collection is what actually prevents the duplicate; a 11000 here is the
+    // expected outcome of that race, not an error to report verbatim.
+    const existing = await Subscriber.findOne({ email: normalized });
     if (existing) {
       return handleRes(res, 409, false, "You are already subscribed");
     }
 
-    await Subscriber.create({ email: email.trim().toLowerCase() });
+    try {
+      await Subscriber.create({ email: normalized });
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        return handleRes(res, 409, false, "You are already subscribed");
+      }
+      throw err;
+    }
 
     handleRes(res, 200, true, "Subscription successful");
   }

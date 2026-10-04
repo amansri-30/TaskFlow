@@ -22,7 +22,9 @@ export default function NotificationButton() {
   const fetchTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await axios.get("/api/getalltasks");
+      // `alerts=1` asks the server for only the four fields this popover reads,
+      // instead of every task's notes and full subtask array.
+      const response = await axios.get("/api/getalltasks?alerts=1");
       setTasks(response.data.tasks || []);
     } catch {
       setTasks([]);

@@ -100,6 +100,18 @@ const TaskSchema = new mongoose.Schema({
   },
 });
 
+// Read-path indexes. Both the dashboard and the notification bell fetch a user's
+// tasks on every load, every refresh and every focus event, so these two
+// queries are the hottest thing the app does.
+//
+// The recurrence index below cannot serve them: it is partial on `baseTaskId`
+// being a real ObjectId, and ordinary tasks have `baseTaskId: null`, so they
+// contribute no entries at all and its `user` prefix is unusable. Without these,
+// every dashboard load collection-scanned every task of every user and then
+// sorted on an unindexed `createdAt` in memory.
+TaskSchema.index({ user: 1, createdAt: -1 });
+TaskSchema.index({ user: 1, trashed: 1, trashedAt: -1 });
+
 // A recurring chain spawns its next occurrence by checking for an existing one
 // and then inserting. Those two steps are not atomic, so two completions of the
 // same task arriving together — a second tab, or a retried PATCH — both passed

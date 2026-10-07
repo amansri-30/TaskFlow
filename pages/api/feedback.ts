@@ -14,8 +14,19 @@ const feedbackHandler = catchAsyncError(
     if (!email || typeof email !== "string" || !EMAIL_RE.test(email.trim())) {
       return handleRes(res, 400, false, "A valid email is required");
     }
+    if (email.trim().length > 254) {
+      return handleRes(res, 400, false, "That email address is too long");
+    }
     if (!message || typeof message !== "string" || !message.trim()) {
       return handleRes(res, 400, false, "Feedback message is required");
+    }
+    // This route takes no authentication, so the only thing standing between it
+    // and an unbounded write is validation. Without a cap, a single request can
+    // store a string the size of the request body limit, and nothing downstream
+    // -- not the model, not the reader, which only ever shows a snippet -- needs
+    // anything close to that.
+    if (message.length > 2000) {
+      return handleRes(res, 400, false, "Feedback message is too long (max 2000 characters)");
     }
 
     await connectDB();

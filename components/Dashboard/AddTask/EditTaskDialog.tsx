@@ -291,9 +291,6 @@ export function EditTaskDialogContent({
                 mode="single"
                 selected={selectedDate}
                 onSelect={handleDateSelected}
-                disabled={(date) =>
-                  date < new Date(new Date().getTime() - 24 * 60 * 60 * 1000)
-                }
                 initialFocus
               />
               {selectedDate && (

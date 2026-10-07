@@ -56,6 +56,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
+import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
 import {
   reminderLabel,
   isReminderDue,
@@ -1098,21 +1099,91 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     return true;
   };
 
-// Free-text search. Tags and subtasks were the two places a task's text could
-// live without being findable: searching "urgent" returned nothing while the
-// chip existed one click away, and "call the dentist" was invisible even though
-// the line was rendered right on the row. Both are now matched, and the matcher
-// lives here rather than being inlined twice, because the active and trash
-// branches had drifted into two near-identical copies of it.
+// Search: free text over title, description, notes, tags and subtasks -- tags
+// and subtasks were the two places a task's text could live without being
+// findable: "urgent" returned nothing while the chip sat one click away, and
+// "call the dentist" was invisible even though the line was rendered on the
+// row -- plus the operators the sidebar offers, so a query can express them
+// without the mouse leaving the box: `#home`, `list:work`, `p:high`,
+// `is:overdue`. Every part is ANDed with the rest. An unrecognised token,
+// including an unknown `is:` or `list:` value, stays in the plain-text set, so
+// `is: fine` still finds text reading "is: fine" instead of silently matching
+// nothing. The matcher lives in one place because the active and trash
+// branches had already drifted into two near-identical copies of it.
+const searchQuery = (() => {
+  const q = {
+    text: [] as string[],
+    tags: [] as string[],
+    lists: [] as string[],
+    priorities: [] as string[],
+    flags: [] as string[],
+  };
+  for (const token of term.split(/\s+/).filter(Boolean)) {
+    if (token.startsWith("#") && token.length > 1) {
+      q.tags.push(token.slice(1));
+      continue;
+    }
+    const match = /^(list|tag|p|priority|is):(.*)$/.exec(token);
+    const value = match ? match[2] : "";
+    if (match && value) {
+      if (match[1] === "list") q.lists.push(value);
+      else if (match[1] === "tag") q.tags.push(value);
+      else if (match[1] === "p" || match[1] === "priority")
+        q.priorities.push(value);
+      else if (SEARCH_FLAGS.has(value)) q.flags.push(value);
+      else q.text.push(token);
+      continue;
+    }
+    q.text.push(token);
+  }
+  return q;
+})();
+
+const hasSearchOperators =
+  searchQuery.tags.length > 0 ||
+  searchQuery.lists.length > 0 ||
+  searchQuery.priorities.length > 0 ||
+  searchQuery.flags.length > 0;
+
 const matchesSearch = (t: Task) => {
   if (!term) return true;
-  if (t.title.toLowerCase().includes(term)) return true;
-  if ((t.description || "").toLowerCase().includes(term)) return true;
-  if ((t.notes || "").toLowerCase().includes(term)) return true;
-  if ((t.tags || []).some((tag) => tag.toLowerCase().includes(term))) return true;
-  return (t.subtasks || []).some((s) =>
-    s.text.toLowerCase().includes(term)
-  );
+
+  for (const list of searchQuery.lists) {
+    // Partial, like the palette's `list:` token: a list named "work stuff"
+    // should be reachable as `list:work` rather than silently not matching.
+    if (!(t.list || "").toLowerCase().includes(list)) return false;
+  }
+  for (const priority of searchQuery.priorities) {
+    if ((t.priority || "medium").toLowerCase() !== priority) return false;
+  }
+  for (const tag of searchQuery.tags) {
+    if (!(t.tags || []).some((value) => value.toLowerCase().includes(tag)))
+      return false;
+  }
+  for (const flag of searchQuery.flags) {
+    if (!matchesFlag(t, flag)) return false;
+  }
+  if (!hasSearchOperators) {
+    if (t.title.toLowerCase().includes(term)) return true;
+    if ((t.description || "").toLowerCase().includes(term)) return true;
+    if ((t.notes || "").toLowerCase().includes(term)) return true;
+    if ((t.tags || []).some((tag) => tag.toLowerCase().includes(term)))
+      return true;
+    return (t.subtasks || []).some((s) =>
+      s.text.toLowerCase().includes(term)
+    );
+  }
+  if (searchQuery.text.length === 0) return true;
+  const haystack = [
+    t.title,
+    t.description || "",
+    t.notes || "",
+    ...(t.tags || []),
+    ...(t.subtasks || []).map((s) => s.text),
+  ]
+    .join("\n")
+    .toLowerCase();
+  return searchQuery.text.every((word) => haystack.includes(word));
 };
 
 const filtered = tasks.filter((t) => matchesFilter(t) && matchesSearch(t));

@@ -84,7 +84,7 @@ export default function SearchAreaWithAvatarDropdown({
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               type="search"
-              placeholder="Search tasks..."
+              placeholder="Search tasks...  (#tag, list:work, p:high, is:overdue)"
               aria-label="Search tasks"
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}

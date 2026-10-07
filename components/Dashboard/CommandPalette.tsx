@@ -13,6 +13,7 @@ import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight } from "lucide-react
 import { Task } from "@/types";
 import { reminderLabel } from "@/lib/reminders";
 import { deferLabel } from "@/lib/dueDates";
+import { matchesFlag } from "@/lib/search";
 
 const MAX_RESULTS = 20;
 
@@ -86,6 +87,9 @@ export default function CommandPalette({
           } else if (part.startsWith("p:")) {
             const p = part.slice(2);
             if (t.priority !== p) return false;
+          } else if (part.startsWith("is:")) {
+            const flag = part.slice(3);
+            if (!matchesFlag(t, flag)) return false;
           } else {
             const haystack = [
               t.title,
@@ -151,7 +155,7 @@ export default function CommandPalette({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search tasks...  (try #tag, list:work, p:high)"
+            placeholder="Search tasks...  (try #tag, list:work, p:high, is:overdue)"
             className="border-0 shadow-none focus-visible:ring-0"
             // Focus stays in this input, so the listbox needs explicit
             // combobox wiring or a screen reader never announces which row the

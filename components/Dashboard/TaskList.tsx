@@ -3342,16 +3342,41 @@ function TaskItem({
           </button>
         )}
         <button
-          aria-label={subtasksOpen ? `Hide subtasks for ${task.title}` : `Show subtasks for ${task.title}`}
-          title={subtasksOpen ? "Hide subtasks" : "Subtasks / checklist"}
+          aria-label={
+            subtasks.length > 0
+              ? `Subtasks for ${task.title}: ${subtaskDone} of ${subtasks.length} done`
+              : subtasksOpen
+              ? `Hide subtasks for ${task.title}`
+              : `Show subtasks for ${task.title}`
+          }
+          title={
+            subtasks.length > 0
+              ? `Subtasks (${subtaskDone}/${subtasks.length})`
+              : "Subtasks / checklist"
+          }
           onClick={() => setSubtasksOpen((v) => !v)}
-          className={`p-1 rounded ${
-            subtasksOpen
+          className={`flex items-center gap-1 p-1 rounded ${
+            subtasksOpen ||
+            (subtasks.length > 0 && subtaskDone === subtasks.length)
               ? "text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950"
               : "hover:bg-muted"
           }`}
         >
           <ListChecks className="h-4 w-4" />
+          {/* The count only appeared once the checklist panel was opened, so a
+              collapsed row gave no hint that subtasks existed or how far along
+              they were -- the one place a progress signal is worth having. */}
+          {subtasks.length > 0 && (
+            <span
+              className={`text-[10px] font-medium tabular-nums ${
+                subtaskDone === subtasks.length
+                  ? "text-emerald-600"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {subtaskDone}/{subtasks.length}
+            </span>
+          )}
         </button>
         {(task.tags || []).slice(0, 3).map((tag) => (
           <TagChip key={tag} tag={tag} />

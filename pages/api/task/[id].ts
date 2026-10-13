@@ -112,7 +112,12 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     case "PUT": {
       const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay, remindAt } = req.body;
       const validPriorities = ["low", "medium", "high"];
-      if (priority && !validPriorities.includes(priority)) {
+      // `priority &&` let an explicit `null` through the guard untouched, and
+      // the assignment below then wrote it -- Mongoose's enum validator skips
+      // null, so the row was stored outside low|medium|high. Creation coerced
+      // null to "medium", so the two entry points disagreed. Test for
+      // "provided" rather than "truthy".
+      if (priority !== undefined && !validPriorities.includes(priority)) {
         return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
       }
       if (recurrence !== undefined && !isRecurrence(recurrence)) {

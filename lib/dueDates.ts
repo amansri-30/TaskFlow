@@ -47,16 +47,18 @@ export function resolveDeferPreset(
       ? currentDue
       : new Date(currentDue)
     : null;
-  const base = current && !isNaN(current.getTime()) ? current : new Date();
-  // A due date already in the past cannot anchor a *relative* preset. Measured
-  // from a task that was due two months ago, "in one month" is still a month
-  // overdue, and the guard below only nudges by a single day, so the task
-  // silently stayed overdue. Relative presets are therefore measured from the
-  // later of the due date and now, which is what the labels promise.
-  const anchor =
-    base.getTime() > Date.now() ? base : new Date();
+  // Only the time-of-day is borrowed from the task: a lead-time reminder is
+  // anchored to the due time, and snapping to midnight would silently shift it.
+  // The date arithmetic counts from today, because every label here is
+  // absolute. Measuring "Tomorrow" from a task already due Friday landed on
+  // Saturday, and measuring "In two weeks" from a task due next Monday landed
+  // three weeks out; measured from a task that was due two months ago the
+  // result was still in the past, where the one-day guard below left it
+  // overdue -- the opposite of what pushing a due date is for.
+  const timeSource =
+    current && !isNaN(current.getTime()) ? current : new Date();
   const keepTime = (date: Date) => {
-    date.setHours(anchor.getHours(), anchor.getMinutes(), 0, 0);
+    date.setHours(timeSource.getHours(), timeSource.getMinutes(), 0, 0);
     return date;
   };
   const today = startOfDay(new Date());
@@ -73,7 +75,7 @@ export function resolveDeferPreset(
 
   switch (preset) {
     case "tomorrow":
-      return guard(keepTime(addDays(anchor, 1)));
+      return guard(keepTime(addDays(today, 1)));
     case "weekend": {
       // Saturday of the current week, but never a weekend day already gone.
       const saturday = addDays(startOfWeek(today, { weekStartsOn: 1 }), 5);
@@ -86,11 +88,11 @@ export function resolveDeferPreset(
       return guard(keepTime(monday));
     }
     case "two-weeks":
-      return guard(keepTime(addWeeks(anchor, 2)));
+      return guard(keepTime(addWeeks(today, 2)));
     case "one-month":
       // date-fns clamps Jan 31 + 1 month to Feb 28/29 rather than overflowing
       // into March, which is the behavior people expect from "in one month".
-      return guard(keepTime(addMonths(anchor, 1)));
+      return guard(keepTime(addMonths(today, 1)));
     default:
       return null;
   }

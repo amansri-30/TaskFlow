@@ -16,10 +16,10 @@ const newTask = catchAsyncError(
 
     const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt, remindAt } = req.body;
 
-    if (!taskTitle || !String(taskTitle).trim())
+    if (typeof taskTitle !== "string" || !taskTitle.trim())
       return handleRes(res, 400, false, "Task Title is required");
 
-    const normalizedTitle = String(taskTitle).trim().slice(0, 120);
+    const normalizedTitle = taskTitle.trim().slice(0, 120);
 
     const validPriorities = ["low", "medium", "high"];
     if (priority && !validPriorities.includes(priority)) {
@@ -92,6 +92,12 @@ const newTask = catchAsyncError(
         : null;
 
     const rawReminder = remindAt ? new Date(remindAt) : null;
+    // A malformed reminder used to be coerced to null and stored silently, so a
+    // backup or duplicate carrying a corrupt reminder lost it with no error,
+    // while the edit path answered the same input with a clean 400.
+    if (remindAt && rawReminder && isNaN(rawReminder.getTime())) {
+      return handleRes(res, 400, false, "Invalid reminder date");
+    }
     const resolvedRemindAt =
       rawReminder && !isNaN(rawReminder.getTime()) ? rawReminder : null;
     // The edit path rejects a reminder that already elapsed, on the grounds that
@@ -102,6 +108,11 @@ const newTask = catchAsyncError(
       return handleRes(res, 400, false, "Reminder must be in the future");
     }
 
+    const normalizedList =
+      typeof list === "string" && list.trim()
+        ? list.trim().slice(0, 50)
+        : "default";
+
     await Task.create({
       title: normalizedTitle,
       description: description || "",
@@ -111,7 +122,11 @@ const newTask = catchAsyncError(
       // string it would have to cast — and reject with a 500 if it couldn't.
       scheduledAt: resolvedDueAt,
       remindAt: resolvedRemindAt,
-      list,
+      // `list` reached Mongoose raw, so a 5000-character name was stored and a
+      // non-string one raised a CastError that `catchAsyncError` reported as
+      // "Invalid id provided." -- a misleading 400 for a list field. PUT has
+      // always required a trimmed string capped at 50; creation now matches.
+      list: normalizedList,
       priority: priority || "medium",
       recurrence: effectiveRecurrence,
       monthlyDay: resolvedMonthlyDay,

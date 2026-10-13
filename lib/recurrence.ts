@@ -44,7 +44,9 @@ export function nextOccurrenceDate(
   // monthly — keep the day-of-month, clamping to the last day of shorter
   // months. The anchor day is fixed at task creation (monthlyDay), so a
   // Jan 31 task repeats on Feb 28, Mar 31, Apr 30 — without drifting to the
-  // 28th permanently.
+  // 28th permanently. Anything that is not a known recurrence reaches this
+  // point, so it is rejected rather than silently treated as monthly.
+  if (recurrence !== "monthly") return null;
   const anchorDay = monthlyDay ?? from.getDate();
   next.setDate(1);
   next.setMonth(next.getMonth() + 1);

@@ -35,19 +35,25 @@ export default function SignUp() {
   const error = useAppSelector((state) => state.user?.error);
   const isLoading = useAppSelector((state) => state.user?.isLoading);
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.push("/dashboard");
-    }
-  }, [isAuthenticated, router]);
-
   // A persisted "authenticated" flag alone is not proof of a live session.
   // Re-validate the cookie-backed user before trusting it, otherwise a stale
-  // flag bounces here -> /dashboard -> /login forever.
+  // flag bounces here -> /dashboard -> /login forever. The redirect waits on
+  // `sessionChecked`, because redirecting on the raw flag lands on /dashboard,
+  // where middleware finds no token and sends the browser back -- once per
+  // bounce, until this revalidation resolves.
+  const [sessionChecked, setSessionChecked] = useState(!isAuthenticated);
+  useEffect(() => {
+    if (sessionChecked && isAuthenticated) {
+      router.push("/dashboard");
+    }
+  }, [sessionChecked, isAuthenticated, router]);
+
   useEffect(() => {
     const authedAtMount = isAuthenticated;
     if (!authedAtMount) return;
-    dispatch(getCurrentUser());
+    dispatch(getCurrentUser()).then(() => {
+      setSessionChecked(true);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

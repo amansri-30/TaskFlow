@@ -186,6 +186,8 @@ export default function TaskList({
   const dispatch = useAppDispatch();
   const [tasks, setTasks] = useState<Task[]>(emptyTasks);
   const [trashed, setTrashed] = useState<Task[]>(emptyTasks);
+  const [quickTitle, setQuickTitle] = useState("");
+  const [quickAdding, setQuickAdding] = useState(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
@@ -973,6 +975,34 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   };
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+  // Quick capture: one line, Enter to save. The new task is placed into the view
+  // it was typed in -- a due date under Today, the matching list when a list
+  // filter is active -- because a task captured from "Today" that lands with no
+  // date is not in Today when the refresh lands, which reads as the capture
+  // having silently failed.
+  const handleQuickAdd = async () => {
+    const title = quickTitle.trim();
+    if (!title || quickAdding) return;
+    setQuickAdding(true);
+    try {
+      const payload: Record<string, unknown> = { taskTitle: title };
+      if (filter === "today") payload.dueDate = new Date().toISOString();
+      if (filter.startsWith("list:")) {
+        payload.list = filter.slice("list:".length);
+      }
+      await axios.post("/api/newtask", payload);
+      setQuickTitle("");
+      toast.success("Task added");
+      refresh();
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.message || err?.message || "Failed to add task";
+      toast.error(message);
+    } finally {
+      setQuickAdding(false);
+    }
+  };
 
   // Restored after mount, not during the first render: reading localStorage in
   // the initialiser would make the server-rendered markup disagree with the
@@ -2332,6 +2362,29 @@ function deferAnchor(task: Task, dueIso: string | null) {
         </>
       ) : (
         <>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleQuickAdd();
+            }}
+            className="flex items-center gap-2"
+          >
+            <Input
+              value={quickTitle}
+              onChange={(e) => setQuickTitle(e.target.value)}
+              placeholder="Add a task and press Enter"
+              aria-label="Quick add task"
+              className="flex-1"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={quickAdding || !quickTitle.trim()}
+            >
+              {quickAdding ? "Adding..." : "Add"}
+            </Button>
+          </form>
+
           {/* Overview / Stats */}
           <section
             aria-label="Task overview"

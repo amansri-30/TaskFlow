@@ -1,18 +1,36 @@
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import userReducer from './user/userSlice';
-import { persistReducer } from "redux-persist";
+import { persistReducer, createTransform, type PersistConfig } from "redux-persist";
 import storage from 'redux-persist/lib/storage';
 
-const persistConfig = {
+type RootStateShape = { user: ReturnType<typeof userReducer> };
+
+// A blacklist is matched against root state keys, and combineReducers leaves
+// exactly one -- `user` -- so the previous `blacklist: ['error', 'message',
+// 'isLoading']` filtered nothing and the whole slice kept being written. Those
+// fields sit one level down, where only a transform reaches them. It matters: a
+// rejected sign-up sets `error` and nothing clears it, and /signup toasts it
+// from a mount effect, so reloading re-fired "Email already registered" for a
+// form that was blank; and a refresh during a request rehydrated
+// `isLoading: true`, leaving the submit button disabled with no thunk running
+// that could ever clear it.
+const userTransform = createTransform<
+  Record<string, unknown>,
+  Record<string, unknown>,
+  RootStateShape
+>(
+  (inbound, key) =>
+    key === "user"
+      ? { ...inbound, error: null, message: null, isLoading: false }
+      : inbound,
+  undefined,
+  { whitelist: ["user"] }
+);
+
+const persistConfig: PersistConfig<RootStateShape> = {
   key: 'root',
   storage,
-  // The whole `user` slice was being written to localStorage, including `error`.
-  // A rejected sign-up sets that field and nothing ever clears it, and /signup
-  // toasts `error` from a mount effect -- so reloading the page after a failed
-  // attempt re-fired "Email already registered" for a submission that no longer
-  // existed on screen. Transient request state has no business surviving a
-  // reload; only the signed-in identity does.
-  blacklist: ['error', 'message', 'isLoading'],
+  transforms: [userTransform],
 }
 
 const rootReducer = combineReducers({

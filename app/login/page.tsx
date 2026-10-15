@@ -46,12 +46,22 @@ export default function LoginForm() {
   // cookie-backed user on the server before trusting the persisted state; if the
   // cookie is gone, getCurrentUser rejects and clears the user, breaking the
   // login <-> dashboard redirect loop.
+  //
+  // The redirect below waits on `sessionChecked`. Redirecting on the raw
+  // persisted `userId` sent the browser to /dashboard, where middleware found no
+  // token and bounced it straight back -- repeatedly, once per bounce, until the
+  // revalidation finally landed. That window opens on every visit after the
+  // 15-day cookie expires while the persisted flag lives on, so it is the
+  // ordinary returning-user path, not an edge case.
+  const [sessionChecked, setSessionChecked] = useState(!userId);
   useEffect(() => {
     const userIdAtMount = userId;
     if (!userIdAtMount) return;
     let cancelled = false;
     dispatch(getCurrentUser()).then((result) => {
-      if (!cancelled && getCurrentUser.rejected.match(result)) {
+      if (cancelled) return;
+      setSessionChecked(true);
+      if (getCurrentUser.rejected.match(result)) {
         toast.error("Your session has expired. Please log in again.", {
           duration: 4000,
         });
@@ -64,10 +74,10 @@ export default function LoginForm() {
   }, [dispatch]);
 
   useEffect(() => {
-    if (userId) {
+    if (sessionChecked && userId) {
       router.replace(redirectTo || "/dashboard");
     }
-  }, [userId, router, redirectTo]);
+  }, [sessionChecked, userId, router, redirectTo]);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();

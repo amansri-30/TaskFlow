@@ -50,6 +50,10 @@ const Feedback = () => {
       const message =
         error?.response?.data?.message || "Failed to submit feedback";
       setHasError(true);
+      // The inline "Feedback Not Delivered" panel only keys off `alertShown`,
+      // which the success path set and this one never did -- so the error state
+      // was recorded and then rendered nowhere, leaving a toast that fades.
+      setAlertShown(true);
       toast.error(message);
     } finally {
       setSubmitting(false);

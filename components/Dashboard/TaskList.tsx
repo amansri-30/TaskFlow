@@ -56,6 +56,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { isRecurrence, type Recurrence } from "@/lib/recurrence";
+import { parseQuickAdd } from "@/lib/quickParse";
 import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
 import {
   reminderLabel,
@@ -236,13 +237,34 @@ function loadUndoStack(): UndoEntry[] {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter(
-        (e): e is UndoEntry =>
-          !!e &&
-          typeof e === "object" &&
-          (e.kind === "delete" || e.kind === "edit") &&
-          typeof e.at === "number"
-      )
+      .filter((e): e is UndoEntry => {
+        if (!e || typeof e !== "object" || typeof e.at !== "number") {
+          return false;
+        }
+        // Validate the payload too: a truncated or hand-edited entry whose
+        // kind/at look fine but that is missing `ids`/`prev` would otherwise
+        // crash the pruning pass below on the very next fetch.
+        if (e.kind === "delete") {
+          return (
+            Array.isArray(e.ids) &&
+            e.ids.every((id: unknown) => typeof id === "string")
+          );
+        }
+        if (e.kind === "edit") {
+          return (
+            Array.isArray(e.prev) &&
+            e.prev.every(
+              (p: any) =>
+                p &&
+                typeof p === "object" &&
+                typeof p.id === "string" &&
+                p.patch &&
+                typeof p.patch === "object"
+            )
+          );
+        }
+        return false;
+      })
       .slice(-UNDO_HISTORY_LIMIT);
   } catch {
     return [];
@@ -822,6 +844,11 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // server-side. The stamp is what makes delivery exactly-once: a scan finds
   // due reminders, notifies, then PATCHes `reminderFired`, and any later poll
   // (including one in a second tab) sees the stamp and stays quiet.
+  // Ids whose reminder PATCH is currently in flight. The scan effect re-runs on
+  // every `tasks` change, so without this two overlapping passes could both see
+  // the same task as due and fire two notifications for it.
+  const remindersInFlight = useRef<Set<string>>(new Set());
+
   const notifyDueReminders = useCallback(async () => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
@@ -830,6 +857,9 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       (t) => !t.completed && isReminderDue(t.remindAt, t.remindedAt)
     );
     for (const task of due) {
+      if (remindersInFlight.current.has(task.id)) continue;
+      remindersInFlight.current.add(task.id);
+      try {
       // Stamp first: if the user closes the tab mid-request the reminder is
       // treated as delivered rather than re-firing on the next visit. The
       // remindAt that was scanned travels with the request so the server can
@@ -890,6 +920,9 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       } catch {
         // Some browsers block the constructor; the stamp still prevents a
         // flood of retries.
+      }
+      } finally {
+        remindersInFlight.current.delete(task.id);
       }
     }
   }, [tasks]);
@@ -982,15 +1015,28 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // date is not in Today when the refresh lands, which reads as the capture
   // having silently failed.
   const handleQuickAdd = async () => {
-    const title = quickTitle.trim();
-    if (!title || quickAdding) return;
+    const raw = quickTitle.trim();
+    if (!raw || quickAdding) return;
+    // The capture box doubles as a tiny natural-language field: `#tags`,
+    // `!priority`, `today`/`tomorrow`/`next week`/a weekday, and a time such as
+    // `6pm` are lifted out, and whatever remains becomes the title.
+    const parsed = parseQuickAdd(raw);
+    const title = parsed.title.trim();
+    if (!title) return;
+    const tags = normalizeTags(parsed.tags);
     setQuickAdding(true);
     try {
       const payload: Record<string, unknown> = { taskTitle: title };
-      if (filter === "today") payload.dueDate = new Date().toISOString();
+      if (parsed.dueDate) {
+        payload.dueDate = parsed.dueDate.toISOString();
+      } else if (filter === "today") {
+        payload.dueDate = new Date().toISOString();
+      }
       if (filter.startsWith("list:")) {
         payload.list = filter.slice("list:".length);
       }
+      if (tags.length > 0) payload.tags = tags;
+      if (parsed.priority) payload.priority = parsed.priority;
       await axios.post("/api/newtask", payload);
       setQuickTitle("");
       toast.success("Task added");
@@ -1712,16 +1758,22 @@ function deferAnchor(task: Task, dueIso: string | null) {
     setUndoStack((prev) =>
       prev
         .map((entry) => {
-          if (entry.kind !== "delete") return entry;
-          const kept = entry.ids.filter((id) => !gone.has(id));
-          if (kept.length === entry.ids.length) return entry;
-          return kept.length
-            ? {
-                ...entry,
-                ids: kept,
-                label: `Undo delete (${plural(kept.length, "task")})`,
-              }
-            : null;
+          if (entry.kind === "delete") {
+            const kept = entry.ids.filter((id) => !gone.has(id));
+            if (kept.length === entry.ids.length) return entry;
+            return kept.length
+              ? {
+                  ...entry,
+                  ids: kept,
+                  label: `Undo delete (${plural(kept.length, "task")})`,
+                }
+              : null;
+          }
+          // An edit entry can no longer restore a field on a task that is gone
+          // for good, so drop those rows too (and the entry once it is empty).
+          const keptPrev = entry.prev.filter((p) => !gone.has(p.id));
+          if (keptPrev.length === entry.prev.length) return entry;
+          return keptPrev.length ? { ...entry, prev: keptPrev } : null;
         })
         .filter((entry): entry is UndoEntry => entry !== null)
     );
@@ -2056,7 +2108,6 @@ function deferAnchor(task: Task, dueIso: string | null) {
     // Clear only the visible completed tasks (respects the active filter/search).
     const done = completed;
     if (done.length === 0) return;
-    const previous = new Map(tasks.map((t) => [t.id, t]));
     const ids = new Set(done.map((t) => t.id));
     setTasks((prev) => prev.filter((t) => !ids.has(t.id)));
     // Prune the cleared ids from the batch selection too — otherwise the
@@ -2071,10 +2122,13 @@ function deferAnchor(task: Task, dueIso: string | null) {
     const failed = done.filter((_, i) => results[i].status === "rejected");
     const succeeded = done.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
-      const failedIds = new Set(failed.map((t) => t.id));
-      setTasks((prev) =>
-        prev.map((t) => (failedIds.has(t.id) ? previous.get(t.id) ?? t : t))
-      );
+      // The optimistic pass removed every cleared row, so a plain field
+      // rollback cannot reach them: re-add the ones the server refused,
+      // skipping any id that reappeared in the meantime.
+      setTasks((prev) => [
+        ...prev,
+        ...failed.filter((t) => !prev.some((x) => x.id === t.id)),
+      ]);
       toast.error(`Failed to move ${failed.length} task${failed.length > 1 ? "s" : ""} to trash`);
     } else {
       toast.success("Cleared completed tasks (moved to trash)");
@@ -2194,17 +2248,25 @@ function deferAnchor(task: Task, dueIso: string | null) {
     );
     const failed = trashed.filter((_, i) => results[i].status === "rejected");
     if (failed.length > 0) {
+      const succeeded = trashed.filter(
+        (_, i) => results[i].status === "fulfilled"
+      );
       setTrashed((prev) =>
         prev.filter((t) => failed.some((f) => f.id === t.id))
       );
+      // The fulfilled rows are gone for good, so any undo entry that could
+      // restore them is dead weight.
+      forgetUndoFor(...succeeded.map((t) => t.id));
       toast.error(
         `Failed to permanently delete ${failed.length} task${failed.length > 1 ? "s" : ""}`
       );
       return;
     }
     setTrashed(emptyTasks);
-// Every row an undo could restore is gone, so the whole history is worthless.
-    setUndoStack([]);
+    // Every row an undo could restore is gone. Forget just those ids rather
+    // than wiping the whole history, which used to throw away still-valid
+    // edit entries for tasks that were never in the trash.
+    forgetUndoFor(...trashed.map((t) => t.id));
     toast.success("Trash emptied");
   };
 
@@ -2372,7 +2434,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
             <Input
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
-              placeholder="Add a task and press Enter"
+              placeholder={'Add a task and press Enter  (try "Pay rent tomorrow #home !high")'}
               aria-label="Quick add task"
               className="flex-1"
             />

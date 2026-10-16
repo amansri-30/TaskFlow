@@ -9,46 +9,34 @@ import MoonSlowWindIcon from "@/public/svg/icons/MoonSlowWindIcon";
 import Sun03Icon from "@/public/svg/icons/Sun03Icon";
 
 const ThemeToggle = () => {
-  const { theme, setTheme } = useTheme();
+  // `theme` can be "system"; `resolvedTheme` is what is actually on screen, so
+  // the icon, tooltip and toast all agree with the visible state instead of
+  // promising the opposite of what the click does.
+  const { resolvedTheme, setTheme } = useTheme();
   const [icon, setIcon] = useState<JSX.Element>(<Sun03Icon />);
+  const isDark = resolvedTheme === "dark";
 
   useEffect(() => {
-    if (theme === "dark") {
-      setIcon(<MoonSlowWindIcon />);
-    } else {
-      setIcon(<Sun03Icon />);
-    }
-  }, [theme]);
+    setIcon(isDark ? <MoonSlowWindIcon /> : <Sun03Icon />);
+  }, [isDark]);
 
   const toggleTheme = () => {
-    if (theme === "dark") {
-      setTheme("light");
-      setIcon(<Sun03Icon />);
-      toast.success("Switched to Light Mode!", {
-        icon: "☀️",
-        style: {
-          borderRadius: "15px",
-          background: "#333",
-          color: "#fff",
-        },
-      });
-    } else {
-      setTheme("dark");
-      setIcon(<MoonSlowWindIcon />);
-      toast.success("Switched to Dark Mode!", {
-        icon: "🌙",
-        style: {
-          borderRadius: "15px",
-          background: "#333",
-          color: "#fff",
-        },
-      });
-    }
+    const next = isDark ? "light" : "dark";
+    setTheme(next);
+    setIcon(next === "dark" ? <MoonSlowWindIcon /> : <Sun03Icon />);
+    toast.success(`Switched to ${next === "dark" ? "Dark" : "Light"} Mode!`, {
+      icon: next === "dark" ? "🌙" : "☀️",
+      style: {
+        borderRadius: "15px",
+        background: "#333",
+        color: "#fff",
+      },
+    });
   };
 
   return (
     <ToolTipIcon
-      name={`Switch to ${theme === "light" ? "dark" : "light"} Mode`}
+      name={`Switch to ${isDark ? "light" : "dark"} Mode`}
       triggerJsxElement={
         <Button
           variant="outline"
@@ -58,7 +46,7 @@ const ThemeToggle = () => {
           // Radix Tooltip only attaches aria-describedby while it is open, so
           // it never supplies an accessible name: without this the control is
           // announced as an unlabelled button.
-          aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
         >
           {icon}
         </Button>

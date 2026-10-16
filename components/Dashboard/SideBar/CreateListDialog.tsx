@@ -21,6 +21,10 @@ export default function CreateListDialog() {
   }
 
   function handleCreate() {
+    if (!listName.trim()) {
+      toast.error("Enter a list name");
+      return;
+    }
     const result = addCustomList(listName);
     if (!result.added) {
       toast.error("List already exists or you reached the 20-list limit");

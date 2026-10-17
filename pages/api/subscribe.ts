@@ -11,7 +11,7 @@ const subscribeHandler = catchAsyncError(
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
 
-    const { email } = req.body;
+    const { email } = req.body || {};
     if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email.trim())) {
       return handleRes(res, 400, false, "Please enter a valid email address");
     }

@@ -110,7 +110,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay, remindAt } = req.body;
+      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay, remindAt } = req.body || {};
       const validPriorities = ["low", "medium", "high"];
       // `priority &&` let an explicit `null` through the guard untouched, and
       // the assignment below then wrote it -- Mongoose's enum validator skips
@@ -193,7 +193,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt, monthlyDay } = req.body;
+      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt, monthlyDay } = req.body || {};
 
       if (restore === true) {
         task.trashed = false;
@@ -374,7 +374,14 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
       // this endpoint and the client's PATCH-shaped undo entries can replay it.
       // `tags` replaces the whole set rather than merging, which is what lets a
       // single-tag removal express itself as "here is the set minus one".
-      if (Array.isArray(tags)) {
+      if (tags !== undefined) {
+        // Accept a comma-separated string like create/PUT do (`normalizeTags`
+        // handles both shapes). A non-array, non-string value gets a message
+        // about tags rather than falling through to "Invalid completion status",
+        // which had nothing to do with the actual problem.
+        if (!Array.isArray(tags) && typeof tags !== "string") {
+          return handleRes(res, 400, false, "Tags must be an array of strings");
+        }
         task.tags = normalizeTags(tags);
         task.updatedAt = new Date();
         await task.save();

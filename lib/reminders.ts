@@ -44,11 +44,15 @@ export function resolveReminderAt(
   if (isNaN(base.getTime())) return null;
 
   if (preset === "tomorrow") {
-    const next = new Date(base);
+    // "Tomorrow morning" is an absolute phrase, so it means 09:00 tomorrow —
+    // not "the day after the task's due date". Anchoring it to `base` (the due
+    // date, supplied by every caller) pushed the reminder a day past a task due
+    // in the future, and for an overdue task landed in the past so it fired the
+    // instant it was set.
+    const next = new Date();
     next.setDate(next.getDate() + 1);
     next.setHours(9, 0, 0, 0);
-    // If "tomorrow 9am" is already in the past, roll it a day forward so a
-    // reminder is never silently created for a moment that has passed.
+    // Never hand back a moment that has already passed.
     if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
     return next;
   }

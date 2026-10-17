@@ -12,7 +12,7 @@ const resetPassword = catchAsyncError(
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
 
-    const { token, password } = req.body;
+    const { token, password } = req.body || {};
     if (!token || typeof token !== "string" || !password) {
       return handleRes(res, 400, false, "Reset token and new password are required");
     }

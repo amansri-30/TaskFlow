@@ -79,6 +79,16 @@ export function subscribeCustomLists(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+const EMPTY_SERVER_SNAPSHOT: string[] = [];
+
 export function useCustomLists(): string[] {
-  return useSyncExternalStore(subscribeCustomLists, getCustomLists, () => []);
+  // A module-level constant, not a fresh `[]` per call: React invokes
+  // getServerSnapshot twice during hydration and compares by reference, so a
+  // new array each time fails that check and logs the "should be cached"
+  // warning while forcing an extra re-render.
+  return useSyncExternalStore(
+    subscribeCustomLists,
+    getCustomLists,
+    () => EMPTY_SERVER_SNAPSHOT
+  );
 }

@@ -12,7 +12,7 @@ const registerUser = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST") return handleRes(res, 405, false, "Only POST request is allowed");
 
-    const { name, email, password } = req.body;
+    const { name, email, password } = req.body || {};
     if (!name || !email || !password) return handleRes(res, 400, false, "All fields required!");
     // Validate the plaintext password BEFORE hashing. The schema's minLength
     // runs against the 60-character bcrypt digest, so it can never reject a

@@ -14,7 +14,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt, remindAt } = req.body;
+    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt, remindAt } = req.body || {};
 
     if (typeof taskTitle !== "string" || !taskTitle.trim())
       return handleRes(res, 400, false, "Task Title is required");

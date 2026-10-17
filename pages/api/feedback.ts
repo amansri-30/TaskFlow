@@ -9,7 +9,7 @@ const feedbackHandler = catchAsyncError(
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
 
-    const { email, message } = req.body;
+    const { email, message } = req.body || {};
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || typeof email !== "string" || !EMAIL_RE.test(email.trim())) {
       return handleRes(res, 400, false, "A valid email is required");

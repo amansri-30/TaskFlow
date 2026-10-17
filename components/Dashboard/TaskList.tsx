@@ -1014,39 +1014,65 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // filter is active -- because a task captured from "Today" that lands with no
   // date is not in Today when the refresh lands, which reads as the capture
   // having silently failed.
+  // Shared by the capture box and the command palette's "create" row: parse the
+  // text into fields, POST, and refresh. Returns false only when there is no
+  // usable title left (whitespace input).
+  const submitTaskFromText = async (raw: string): Promise<boolean> => {
+    const parsed = parseQuickAdd(raw);
+    const title = parsed.title.trim();
+    if (!title) return false;
+    const tags = normalizeTags(parsed.tags);
+    const payload: Record<string, unknown> = { taskTitle: title };
+    if (parsed.dueDate) {
+      payload.dueDate = parsed.dueDate.toISOString();
+    } else if (filter === "today") {
+      payload.dueDate = new Date().toISOString();
+    }
+    if (filter.startsWith("list:")) {
+      payload.list = filter.slice("list:".length);
+    }
+    if (tags.length > 0) payload.tags = tags;
+    if (parsed.priority) payload.priority = parsed.priority;
+    await axios.post("/api/newtask", payload);
+    return true;
+  };
+
   const handleQuickAdd = async () => {
     const raw = quickTitle.trim();
     if (!raw || quickAdding) return;
-    // The capture box doubles as a tiny natural-language field: `#tags`,
-    // `!priority`, `today`/`tomorrow`/`next week`/a weekday, and a time such as
-    // `6pm` are lifted out, and whatever remains becomes the title.
-    const parsed = parseQuickAdd(raw);
-    const title = parsed.title.trim();
-    if (!title) return;
-    const tags = normalizeTags(parsed.tags);
     setQuickAdding(true);
     try {
-      const payload: Record<string, unknown> = { taskTitle: title };
-      if (parsed.dueDate) {
-        payload.dueDate = parsed.dueDate.toISOString();
-      } else if (filter === "today") {
-        payload.dueDate = new Date().toISOString();
+      // The capture box doubles as a tiny natural-language field: `#tags`,
+      // `!priority`, `today`/`tomorrow`/`next week`/a weekday, and a time such
+      // as `6pm` are lifted out, and whatever remains becomes the title.
+      const created = await submitTaskFromText(raw);
+      if (created) {
+        setQuickTitle("");
+        toast.success("Task added");
+        refresh();
       }
-      if (filter.startsWith("list:")) {
-        payload.list = filter.slice("list:".length);
-      }
-      if (tags.length > 0) payload.tags = tags;
-      if (parsed.priority) payload.priority = parsed.priority;
-      await axios.post("/api/newtask", payload);
-      setQuickTitle("");
-      toast.success("Task added");
-      refresh();
     } catch (err: any) {
       const message =
         err?.response?.data?.message || err?.message || "Failed to add task";
       toast.error(message);
     } finally {
       setQuickAdding(false);
+    }
+  };
+
+  // The palette's "create" row: the query is parsed the same way the capture box
+  // does, so "Pay rent tomorrow #home !high" lands as a fully-formed task.
+  const handlePaletteCreate = async (raw: string) => {
+    try {
+      const created = await submitTaskFromText(raw);
+      if (created) {
+        toast.success("Task added");
+        refresh();
+      }
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.message || err?.message || "Failed to add task";
+      toast.error(message);
     }
   };
 
@@ -2318,6 +2344,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
         onTogglePin={handleTogglePin}
         onNavigate={onFilterChange}
         onSearch={onSearchChange}
+        onCreateTask={handlePaletteCreate}
       />
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-lg font-semibold md:text-2xl">{heading}</h1>

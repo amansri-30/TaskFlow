@@ -30,7 +30,7 @@ const logIn = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST") return handleRes(res, 405, false, "Only post request is allowed");
 
-    const {email, password} = req.body;
+    const {email, password} = req.body || {};
     // Type-check, not just truthiness: `bcrypt.compare` rejects a non-string
     // with "data and hash must be strings", and that error matches nothing in
     // catchAsyncError, so a JSON body of `{"password": 123}` surfaced as a 500
@@ -72,23 +72,28 @@ const logIn = catchAsyncError(
 
     const passwordMatched = await bcrypt.compare(password, userWithPassword.password);
     if (!passwordMatched) {
-      // Count the failure atomically on the document, so concurrent guesses
-      // cannot race each other past the threshold by all reading the same count.
-      // A lockout that expired resets the tally as well as the timer.
-      const attempts = userWithPassword.loginAttempts || 0;
-      const base =
-        userWithPassword.lockedUntil && userWithPassword.lockedUntil <= now ? 0 : attempts;
-      const next = base + 1;
-      const shouldLock = next >= MAX_ATTEMPTS;
+      // Count this failure atomically: `$inc` advances the tally on the document
+      // itself, so N concurrent guesses each contribute instead of all writing
+      // back the same stale count they read before the ~100ms bcrypt compare.
+      // Reading then `$set`-ing the old value let a parallel burst never climb
+      // past 1, so the threshold lockout never engaged. A lockout whose window
+      // has already elapsed resets the tally before this failure is counted.
       await User.updateOne(
-        {_id: userWithPassword._id},
-        {
-          $set: {
-            loginAttempts: next,
-            lockedUntil: shouldLock ? new Date(Date.now() + lockoutDuration(next)) : null,
-          },
-        }
+        { _id: userWithPassword._id, lockedUntil: { $ne: null, $lte: now } },
+        { $set: { loginAttempts: 0, lockedUntil: null } }
       );
+      const afterFailure = await User.findOneAndUpdate(
+        { _id: userWithPassword._id },
+        { $inc: { loginAttempts: 1 } },
+        { new: true }
+      ).select("+loginAttempts");
+      const attempts = afterFailure?.loginAttempts ?? 1;
+      if (attempts >= MAX_ATTEMPTS) {
+        await User.updateOne(
+          { _id: userWithPassword._id },
+          { $set: { lockedUntil: new Date(Date.now() + lockoutDuration(attempts)) } }
+        );
+      }
       return handleRes(res, 400, false, "Invalid email or password");
     }
 

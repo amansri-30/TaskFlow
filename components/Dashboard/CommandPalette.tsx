@@ -9,13 +9,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight } from "lucide-react";
+import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight, Plus } from "lucide-react";
 import { Task } from "@/types";
 import { reminderLabel } from "@/lib/reminders";
 import { deferLabel } from "@/lib/dueDates";
 import { matchesFlag } from "@/lib/search";
+import { parseQuickAdd } from "@/lib/quickParse";
 
 const MAX_RESULTS = 20;
+
+type PaletteItem = { kind: "create" } | { kind: "task"; task: Task };
 
 type CommandPaletteProps = {
   open: boolean;
@@ -25,6 +28,7 @@ type CommandPaletteProps = {
   onTogglePin: (task: Task) => void;
   onNavigate: (filter: string) => void;
   onSearch: (term: string) => void;
+  onCreateTask: (text: string) => void;
 };
 
 function taskMeta(t: Task): string {
@@ -54,6 +58,7 @@ export default function CommandPalette({
   onTogglePin,
   onNavigate,
   onSearch,
+  onCreateTask,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -110,9 +115,42 @@ export default function CommandPalette({
       .slice(0, MAX_RESULTS);
   }, [tasks, query]);
 
+  // Anything non-empty can become a task. Parse it with the same grammar the
+  // quick-add box uses so the preview ("due Fri", "#home") matches what will
+  // actually be saved, and offer a create row ahead of the search results.
+  const trimmedQuery = query.trim();
+  const createPreview = useMemo(
+    () => (trimmedQuery ? parseQuickAdd(trimmedQuery) : null),
+    [trimmedQuery]
+  );
+  const createTitle = createPreview?.title.trim() ?? "";
+  const showCreate = createTitle.length > 0;
+  const createMeta = createPreview
+    ? [
+        createPreview.dueDate ? deferLabel(createPreview.dueDate) : "",
+        createPreview.priority ? `${createPreview.priority} priority` : "",
+        createPreview.tags.length
+          ? createPreview.tags.map((t) => `#${t}`).join(" ")
+          : "",
+      ]
+        .filter(Boolean)
+        .join("  ·  ")
+    : "";
+
+  // The create row sits after the search results so the default highlight stays
+  // on the best existing match — typing "buy milk" to complete a task must not
+  // create a second one. When nothing matches, it is the only row and Enter
+  // creates, which is exactly what the user wants.
+  const items = useMemo<PaletteItem[]>(() => {
+    const list: PaletteItem[] = results.map((task) => ({ kind: "task", task }));
+    if (showCreate) list.push({ kind: "create" });
+    return list;
+  }, [results, showCreate]);
+  const createIndex = showCreate ? results.length : -1;
+
   useEffect(() => {
-    setActiveIndex((i) => Math.min(i, Math.max(0, results.length - 1)));
-  }, [results.length]);
+    setActiveIndex((i) => Math.min(i, Math.max(0, items.length - 1)));
+  }, [items.length]);
 
   // The results list scrolls inside a max-h box, so moving the highlight past
   // the fold left it off-screen with no visual cue of which row Enter acts on.
@@ -120,7 +158,7 @@ export default function CommandPalette({
   // contain characters that are awkward to embed in a selector.
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex, results.length]);
+  }, [activeIndex, items.length]);
 
   const openTask = (t: Task) => {
     onNavigate(t.list && t.list !== "default" ? `list:${t.list}` : "all");
@@ -131,16 +169,28 @@ export default function CommandPalette({
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActiveIndex((i) => (i + 1) % Math.max(1, results.length));
+      setActiveIndex((i) => (i + 1) % Math.max(1, items.length));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActiveIndex((i) => (i - 1 + Math.max(1, results.length)) % Math.max(1, results.length));
-    } else if (e.key === "Enter" && results[activeIndex]) {
+      setActiveIndex((i) => (i - 1 + Math.max(1, items.length)) % Math.max(1, items.length));
+    } else if (e.key === "Enter" && items[activeIndex]) {
       e.preventDefault();
-      onToggleComplete(results[activeIndex], !results[activeIndex].completed);
+      const item = items[activeIndex];
+      if (item.kind === "create") {
+        onCreateTask(trimmedQuery);
+      } else {
+        onToggleComplete(item.task, !item.task.completed);
+      }
       onClose();
     }
   };
+
+  const activeItem = items[activeIndex];
+  const activeDescendant = activeItem
+    ? activeItem.kind === "create"
+      ? "command-palette-option-create"
+      : `command-palette-option-${activeItem.task.id}`
+    : undefined;
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -161,12 +211,10 @@ export default function CommandPalette({
             // combobox wiring or a screen reader never announces which row the
             // arrow keys are on.
             role="combobox"
-            aria-expanded={results.length > 0}
+            aria-expanded={items.length > 0}
             aria-controls="command-palette-results"
             aria-autocomplete="list"
-            aria-activedescendant={
-              results[activeIndex] ? `command-palette-option-${results[activeIndex].id}` : undefined
-            }
+            aria-activedescendant={activeDescendant}
           />
         </div>
         <div
@@ -175,7 +223,7 @@ export default function CommandPalette({
           role="listbox"
           aria-label="Task search results"
         >
-          {results.length === 0 ? (
+          {results.length === 0 && !showCreate ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
               No tasks match &ldquo;{query}&rdquo;
             </p>
@@ -248,6 +296,42 @@ export default function CommandPalette({
               </div>
             ))
           )}
+          {showCreate && (
+            <div
+              key="__create__"
+              id="command-palette-option-create"
+              ref={createIndex === activeIndex ? activeRef : null}
+              role="option"
+              aria-selected={createIndex === activeIndex}
+              className={cn(
+                "rounded-md mt-1",
+                createIndex === activeIndex && "bg-muted"
+              )}
+              onMouseEnter={() => setActiveIndex(createIndex)}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  onCreateTask(trimmedQuery);
+                  onClose();
+                }}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left"
+              >
+                <Plus className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    Create &ldquo;{createTitle}&rdquo;
+                  </span>
+                  {createMeta && (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {createMeta}
+                    </span>
+                  )}
+                </span>
+                <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              </button>
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-[11px] text-muted-foreground">
           <span>
@@ -261,6 +345,11 @@ export default function CommandPalette({
               <span className="rounded border px-1">↓</span>
               <span className="rounded border px-1">↵</span> navigate/complete
             </span>
+            {showCreate && (
+              <span className="hidden items-center gap-1 sm:flex">
+                <Plus className="h-3 w-3" /> or type to add
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <Pin className="h-3 w-3" /> pin
             </span>

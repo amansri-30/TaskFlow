@@ -37,7 +37,9 @@ export const registerUser = createAsyncThunk(
       );
       return response.data.user;
     } catch (error: any) {
-      return thunkAPI.rejectWithValue(error.response.data.message);
+      return thunkAPI.rejectWithValue(
+        error?.response?.data?.message || "Sign up failed. Please try again."
+      );
     }
   }
 );

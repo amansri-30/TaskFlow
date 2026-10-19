@@ -81,11 +81,26 @@ const moveDueDate = (task: any, nextDue: Date | null) => {
   if (unchanged) return;
 
   task.scheduledAt = nextDue;
-  if (task.remindAt instanceof Date && nextDue) {
-    const leadMs = previousDue ? previousDue.getTime() - task.remindAt.getTime() : 0;
-    if (leadMs > 0) {
-      const shifted = new Date(nextDue.getTime() - leadMs);
-      task.remindAt = shifted.getTime() > Date.now() ? shifted : null;
+  if (task.remindAt instanceof Date) {
+    if (nextDue === null) {
+      // The date was cleared. An already-fired reminder must be dropped here:
+      // `remindedAt` is reset below (to re-arm a genuine move), and leaving a
+      // past `remindAt` armed next to a cleared `remindedAt` re-raised a
+      // notification the user had already acknowledged.
+      if (task.remindAt.getTime() <= Date.now()) task.remindAt = null;
+    } else if (previousDue) {
+      // Preserve the same lead ahead of the due date. `>= 0` rather than `> 0`
+      // so an "at time of task" reminder (zero lead) follows the new date;
+      // the strict form left it pinned to the old time, firing at the wrong
+      // moment and then suppressing the reminder for the moved date.
+      const leadMs = previousDue.getTime() - task.remindAt.getTime();
+      if (leadMs >= 0) {
+        const shifted = new Date(nextDue.getTime() - leadMs);
+        task.remindAt = shifted.getTime() > Date.now() ? shifted : null;
+      }
+    } else if (task.remindAt.getTime() <= Date.now()) {
+      // A dateless task being given a date: an elapsed reminder is stale.
+      task.remindAt = null;
     }
   }
   // Re-arm: an acknowledged reminder must not suppress the newly moved time.
@@ -465,15 +480,19 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
               // Carry the reminder onto the next occurrence, but only when the
               // gap between reminder and due date still holds — a reminder
               // that would land in the past is dropped rather than firing
-              // instantly on a task nobody has seen yet.
+              // instantly on a task nobody has seen yet. `>= 0` keeps an
+              // "at time of task" reminder (zero lead), which the strict form
+              // dropped entirely, silently removing the reminder from every
+              // future occurrence of a repeating task.
               const reminder = task.remindAt instanceof Date ? task.remindAt : null;
               const leadMs = reminder && task.scheduledAt instanceof Date
                 ? task.scheduledAt.getTime() - reminder.getTime()
                 : 0;
-              const nextRemindAt =
-                reminder && leadMs > 0
-                  ? new Date(nextDue.getTime() - leadMs)
-                  : null;
+              let nextRemindAt: Date | null = null;
+              if (reminder && leadMs >= 0) {
+                const shifted = new Date(nextDue.getTime() - leadMs);
+                nextRemindAt = shifted.getTime() > Date.now() ? shifted : null;
+              }
               try {
                 nextTask = await Task.create({
                   title: task.title,

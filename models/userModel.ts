@@ -46,6 +46,14 @@ const UserSchema = new mongoose.Schema({
         type: Date,
         default: null,
     },
+    // How many times this account has been locked out. Drives the escalating
+    // cooldown: the first lockout is a short 60s and only repeat offenders see
+    // the longer windows. Reset on a successful sign-in.
+    lockoutCount: {
+        type: Number,
+        default: 0,
+        select: false,
+    },
     createdAt: {
         type: Date,
         default: Date.now,

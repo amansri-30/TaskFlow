@@ -20,11 +20,13 @@ const DUMMY_HASH =
 // an online dictionary could be run at whatever the network allowed.
 const MAX_ATTEMPTS = 8;
 // Escalating, so a sustained attack gets slower without penalising a user who
-// fat-fingered a password once or twice.
+// fat-fingered a password once or twice. Indexed by how many lockouts the
+// account has already accumulated, so the first is a short 60s and only a
+// repeat offender reaches the hour-long window.
 const LOCKOUT_MS = [60_000, 300_000, 900_000, 3_600_000];
 
-const lockoutDuration = (attempts: number) =>
-  LOCKOUT_MS[Math.min(attempts, LOCKOUT_MS.length - 1)];
+const lockoutDuration = (lockoutCount: number) =>
+  LOCKOUT_MS[Math.min(Math.max(lockoutCount - 1, 0), LOCKOUT_MS.length - 1)];
 
 const logIn = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
@@ -89,20 +91,34 @@ const logIn = catchAsyncError(
       ).select("+loginAttempts");
       const attempts = afterFailure?.loginAttempts ?? 1;
       if (attempts >= MAX_ATTEMPTS) {
+        // Escalate off a persisted count of prior lockouts, not the attempt
+        // tally: `attempts` resets each time a lockout expires, so keying the
+        // window off it always produced the longest tier — the shortest three
+        // were unreachable and a user who mistyped eight times got a full hour.
+        const locked = await User.findOneAndUpdate(
+          { _id: userWithPassword._id },
+          { $inc: { lockoutCount: 1 } },
+          { new: true }
+        ).select("+lockoutCount");
+        const count = locked?.lockoutCount ?? 1;
         await User.updateOne(
           { _id: userWithPassword._id },
-          { $set: { lockedUntil: new Date(Date.now() + lockoutDuration(attempts)) } }
+          { $set: { lockedUntil: new Date(Date.now() + lockoutDuration(count)) } }
         );
       }
       return handleRes(res, 400, false, "Invalid email or password");
     }
 
     // Correct password: clear the tally so a legitimate user who fumbled twice
-    // is not left one typo away from a lockout.
-    if ((userWithPassword.loginAttempts || 0) > 0 || userWithPassword.lockedUntil) {
+    // is not left one typo away from a lockout, and reset the lockout count so
+    // the escalation starts over.
+    if (
+      (userWithPassword.loginAttempts || 0) > 0 ||
+      userWithPassword.lockedUntil
+    ) {
       await User.updateOne(
         {_id: userWithPassword._id},
-        {$set: {loginAttempts: 0, lockedUntil: null}}
+        {$set: {loginAttempts: 0, lockedUntil: null, lockoutCount: 0}}
       );
     }
 

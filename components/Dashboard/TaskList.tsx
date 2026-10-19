@@ -1033,6 +1033,14 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     }
     if (tags.length > 0) payload.tags = tags;
     if (parsed.priority) payload.priority = parsed.priority;
+    if (parsed.recurrence) {
+      payload.recurrence = parsed.recurrence;
+      // Anchor the monthly repeat to the due date the user named, matching the
+      // edit dialog, so "rent every month" on the 31st keeps the 31st.
+      if (parsed.recurrence === "monthly" && parsed.dueDate) {
+        payload.monthlyDay = parsed.dueDate.getDate();
+      }
+    }
     await axios.post("/api/newtask", payload);
     return true;
   };
@@ -1241,12 +1249,6 @@ const searchQuery = (() => {
   return q;
 })();
 
-const hasSearchOperators =
-  searchQuery.tags.length > 0 ||
-  searchQuery.lists.length > 0 ||
-  searchQuery.priorities.length > 0 ||
-  searchQuery.flags.length > 0;
-
 const matchesSearch = (t: Task) => {
   if (!term) return true;
 
@@ -1265,17 +1267,11 @@ const matchesSearch = (t: Task) => {
   for (const flag of searchQuery.flags) {
     if (!matchesFlag(t, flag)) return false;
   }
-  if (!hasSearchOperators) {
-    if (t.title.toLowerCase().includes(term)) return true;
-    if ((t.description || "").toLowerCase().includes(term)) return true;
-    if ((t.notes || "").toLowerCase().includes(term)) return true;
-    if ((t.tags || []).some((tag) => tag.toLowerCase().includes(term)))
-      return true;
-    return (t.subtasks || []).some((s) =>
-      s.text.toLowerCase().includes(term)
-    );
-  }
   if (searchQuery.text.length === 0) return true;
+  // Every leftover word must appear somewhere in the task, so "call dentist"
+  // finds "Call the dentist". The old plain-text branch matched the whole query
+  // as one contiguous substring instead, so a multi-word search only worked
+  // once an operator was added — the same words then matched as separate tokens.
   const haystack = [
     t.title,
     t.description || "",
@@ -1985,11 +1981,16 @@ function deferAnchor(task: Task, dueIso: string | null) {
       }
     }
     // A reminder is an absolute instant, so it round-trips as-is. Trashed
-    // tasks don't need one — the notification scan skips them anyway.
+    // tasks don't need one — the notification scan skips them anyway. Only a
+    // reminder still in the future survives: the create endpoint rejects an
+    // elapsed one (it would fire the moment the import lands), so a backup
+    // taken after a reminder fired would otherwise be silently dropped.
     let remindAt: string | null = null;
     if (item.remindAt && item.trashed !== true) {
       const d = new Date(item.remindAt);
-      if (!isNaN(d.getTime())) remindAt = d.toISOString();
+      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) {
+        remindAt = d.toISOString();
+      }
     }
     return {
       taskTitle: title,
@@ -2461,7 +2462,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
             <Input
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
-              placeholder={'Add a task and press Enter  (try "Pay rent tomorrow #home !high")'}
+              placeholder={'Add a task and press Enter  (try "Pay rent tomorrow #home !high every month")'}
               aria-label="Quick add task"
               className="flex-1"
             />

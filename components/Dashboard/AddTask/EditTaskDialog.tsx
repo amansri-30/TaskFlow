@@ -101,7 +101,16 @@ export function EditTaskDialogContent({
     // the custom-time picker all reject it; this raw datetime-local field did
     // not. Checked before the request so the user gets the reason inline, and
     // enforced again server-side in case the client guard is bypassed.
-    if (remindAt && new Date(remindAt).getTime() <= Date.now()) {
+    //
+    // Only when the field was actually edited: a reminder that already fired
+    // still sits in the dialog, so guarding it unconditionally blocked saving
+    // any unrelated change ("Reminder must be in the future") on a task whose
+    // reminder had gone off. An untouched past value is never sent anyway.
+    if (
+      remindAt !== initialRemindAt &&
+      remindAt &&
+      new Date(remindAt).getTime() <= Date.now()
+    ) {
       toast.error("Reminder must be in the future");
       return;
     }

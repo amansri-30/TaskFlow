@@ -1,4 +1,5 @@
 import { addDays, startOfDay } from "date-fns";
+import type { Recurrence } from "./recurrence";
 
 export type QuickPriority = "low" | "medium" | "high";
 
@@ -10,6 +11,8 @@ export type QuickParseResult = {
   /** Raw tags typed as `#tag`, in the order they appeared. */
   tags: string[];
   priority: QuickPriority | null;
+  /** Repeat cadence named with `daily` / `every day` / `weekly` / `monthly`. */
+  recurrence: Recurrence | null;
 };
 
 const WEEKDAYS = [
@@ -56,9 +59,10 @@ function parseTimeToken(
 /**
  * Turn a one-line "quick add" string into structured task fields, matching the
  * grammar advertised in the capture box: `#tag`, `!high`, `today` / `tomorrow`
- * / a weekday name / `next week`, and an optional time such as `6pm` or `18:00`.
- * Everything that is not recognised is left in the title, so a stray word is
- * never silently swallowed.
+ * / a weekday name / `next week`, an optional time such as `6pm` or `18:00`, and
+ * a repeat cadence (`daily`, `every day`, `weekly`, `every week`, `monthly`,
+ * `every month`). Everything that is not recognised is left in the title, so a
+ * stray word is never silently swallowed.
  */
 export function parseQuickAdd(
   input: string,
@@ -67,6 +71,7 @@ export function parseQuickAdd(
   const tags: string[] = [];
   let priority: QuickPriority | null = null;
   let dueDate: Date | null = null;
+  let recurrence: Recurrence | null = null;
   let time: { hours: number; minutes: number } | null = null;
   const kept: string[] = [];
 
@@ -102,6 +107,38 @@ export function parseQuickAdd(
 
     if (lower === "next" && words[i + 1]?.toLowerCase() === "week") {
       dueDate = addDays(startOfDay(now), 7);
+      i += 1;
+      continue;
+    }
+
+    // Repeat cadence. `every` only consumes the next word when it forms a known
+    // phrase, so "every other week" leaves "every other week" in the title
+    // rather than being half-eaten into a weekly repeat.
+    const nextWord = words[i + 1]?.toLowerCase();
+    if (lower === "daily" || lower === "everyday") {
+      recurrence = "daily";
+      continue;
+    }
+    if (lower === "weekly") {
+      recurrence = "weekly";
+      continue;
+    }
+    if (lower === "monthly") {
+      recurrence = "monthly";
+      continue;
+    }
+    if (lower === "every" && nextWord === "day") {
+      recurrence = "daily";
+      i += 1;
+      continue;
+    }
+    if (lower === "every" && nextWord === "week") {
+      recurrence = "weekly";
+      i += 1;
+      continue;
+    }
+    if (lower === "every" && nextWord === "month") {
+      recurrence = "monthly";
       i += 1;
       continue;
     }
@@ -146,5 +183,5 @@ export function parseQuickAdd(
   }
 
   const title = kept.join(" ").trim();
-  return { title: title || input.trim(), dueDate, tags, priority };
+  return { title: title || input.trim(), dueDate, tags, priority, recurrence };
 }

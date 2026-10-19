@@ -13,7 +13,8 @@ import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight, Plus } from "lucide
 import { Task } from "@/types";
 import { reminderLabel } from "@/lib/reminders";
 import { deferLabel } from "@/lib/dueDates";
-import { matchesFlag } from "@/lib/search";
+import { matchesFlag, SEARCH_FLAGS } from "@/lib/search";
+import { recurrenceLabel } from "@/lib/recurrence";
 import { parseQuickAdd } from "@/lib/quickParse";
 
 const MAX_RESULTS = 20;
@@ -83,31 +84,39 @@ export default function CommandPalette({
     return tasks
       .filter((t) => {
         for (const part of parts) {
-          if (part.startsWith("#")) {
+          if (part.startsWith("#") && part.length > 1) {
             const tag = part.slice(1);
             if (!(t.tags || []).some((x) => x.toLowerCase().includes(tag))) return false;
-          } else if (part.startsWith("list:")) {
-            const list = part.slice(5);
-            if (!(t.list || "").toLowerCase().includes(list)) return false;
-          } else if (part.startsWith("p:")) {
-            const p = part.slice(2);
-            if (t.priority !== p) return false;
-          } else if (part.startsWith("is:")) {
-            const flag = part.slice(3);
-            if (!matchesFlag(t, flag)) return false;
           } else {
-            const haystack = [
-              t.title,
-              t.description || "",
-              t.notes || "",
-              t.list || "",
-              t.priority || "",
-              ...(t.tags || []),
-              ...(t.subtasks || []).map((s) => s.text),
-            ]
-              .join(" ")
-              .toLowerCase();
-            if (!haystack.includes(part)) return false;
+            // Same operator vocabulary as the main search box: `list:`, `tag:`,
+            // `p:`/`priority:` and `is:`. An unknown operator (or an unknown
+            // `is:` value) is not a filter — it is treated as plain text, so
+            // "is: fine" still finds tasks rather than silently matching none.
+            const op = /^(list|tag|p|priority|is):(.*)$/.exec(part);
+            const value = op ? op[2] : "";
+            if (op && value && op[1] === "list") {
+              if (!(t.list || "").toLowerCase().includes(value)) return false;
+            } else if (op && value && op[1] === "tag") {
+              if (!(t.tags || []).some((x) => x.toLowerCase().includes(value)))
+                return false;
+            } else if (op && value && (op[1] === "p" || op[1] === "priority")) {
+              if ((t.priority || "medium").toLowerCase() !== value) return false;
+            } else if (op && value && op[1] === "is" && SEARCH_FLAGS.has(value)) {
+              if (!matchesFlag(t, value)) return false;
+            } else {
+              const haystack = [
+                t.title,
+                t.description || "",
+                t.notes || "",
+                t.list || "",
+                t.priority || "",
+                ...(t.tags || []),
+                ...(t.subtasks || []).map((s) => s.text),
+              ]
+                .join(" ")
+                .toLowerCase();
+              if (!haystack.includes(part)) return false;
+            }
           }
         }
         return true;
@@ -129,6 +138,9 @@ export default function CommandPalette({
     ? [
         createPreview.dueDate ? deferLabel(createPreview.dueDate) : "",
         createPreview.priority ? `${createPreview.priority} priority` : "",
+        createPreview.recurrence
+          ? recurrenceLabel(createPreview.recurrence)
+          : "",
         createPreview.tags.length
           ? createPreview.tags.map((t) => `#${t}`).join(" ")
           : "",

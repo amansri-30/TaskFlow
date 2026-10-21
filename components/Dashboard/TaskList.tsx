@@ -1832,14 +1832,23 @@ function deferAnchor(task: Task, dueIso: string | null) {
     const dropConsumed = (prev: UndoEntry[]) => {
       // Identity first. `at` is a millisecond timestamp, so two entries pushed
       // in the same tick are indistinguishable by it, and matching the wrong one
-      // would truncate the stack at the wrong place. The live array still holds
-      // this exact object; entries appended during the await are new objects
-      // after it, which is exactly the boundary wanted here.
+      // would truncate the stack at the wrong place.
       const at = prev.indexOf(entry);
-      if (at !== -1) return prev.slice(0, at);
-      // Only if the entry itself was replaced mid-flight (pruned, or relabelled).
-      const byAt = prev.findIndex((e) => e.at === consumedAt);
-      return byAt === -1 ? prev : prev.slice(0, byAt);
+      const idx = at !== -1 ? at : prev.findIndex((e) => e.at === consumedAt);
+      if (idx === -1) return prev;
+      // Plain Undo removes only its own entry. It slices nothing above itself,
+      // because the batch toolbar stays live during the replay: an action that
+      // lands mid-flight was reported as succeeded, and truncating here used to
+      // discard its undo entry too — leaving it with no way back. Replaying an
+      // older entry from the history menu keeps the LIFO rule and drops
+      // everything recorded after it, so the remaining history stays consistent
+      // with what is on screen.
+      if (index === undefined) {
+        const next = prev.slice();
+        next.splice(idx, 1);
+        return next;
+      }
+      return prev.slice(0, idx);
     };
     setUndoBusy(true);
     try {

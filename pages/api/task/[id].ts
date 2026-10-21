@@ -507,7 +507,14 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                   remindedAt: null,
                   monthlyDay: task.monthlyDay,
                   tags: task.tags || [],
-                  subtasks: task.subtasks || [],
+                  // Unticked, and without the parent's subtask ids: the parent's
+                  // boxes were ticked on the way to completion, so copying them
+                  // verbatim made every new occurrence arrive "3/3 done" and the
+                  // user had to untick the whole list before starting again.
+                  subtasks: (task.subtasks || []).map((s: any) => ({
+                    text: s.text,
+                    completed: false,
+                  })),
                   pinned: task.pinned,
                   baseTaskId: task._id,
                 });

@@ -19,7 +19,25 @@ import { parseQuickAdd } from "@/lib/quickParse";
 
 const MAX_RESULTS = 20;
 
-type PaletteItem = { kind: "create" } | { kind: "task"; task: Task };
+type PaletteItem =
+  | { kind: "create" }
+  | { kind: "task"; task: Task }
+  | { kind: "nav"; filter: string; label: string };
+
+// Smart views the sidebar can jump to. `keywords` carries the synonyms a user
+// is likely to type ("bin" for Trash), and every word of the query must appear
+// somewhere in label+keywords+filter, so "go to today" resolves to Today while
+// "today exam" does not.
+const NAV_VIEWS: { filter: string; label: string; keywords: string }[] = [
+  { filter: "all", label: "Go to Inbox", keywords: "all home" },
+  { filter: "today", label: "Go to Today", keywords: "today" },
+  { filter: "scheduled", label: "Go to Scheduled", keywords: "scheduled upcoming future" },
+  { filter: "next7", label: "Go to Next 7 days", keywords: "next7 week seven days" },
+  { filter: "overdue", label: "Go to Overdue", keywords: "overdue late behind" },
+  { filter: "nodate", label: "Go to No due date", keywords: "nodate undated unscheduled" },
+  { filter: "pinned", label: "Go to Pinned", keywords: "pinned star favorites" },
+  { filter: "trash", label: "Go to Trash", keywords: "trash deleted bin recycle" },
+];
 
 type CommandPaletteProps = {
   open: boolean;
@@ -149,6 +167,20 @@ export default function CommandPalette({
         .join("  ·  ")
     : "";
 
+  // View jumps appear only when the query matched no task, so the rows a user
+  // asked for ("trash") never crowd out real results that happen to share the
+  // word. They sit after the create row: typing "trash" with nothing else
+  // matching still defaults to creating a task named "trash", and a view jump
+  // is one ↓ away.
+  const navRows = useMemo<PaletteItem[]>(() => {
+    if (!trimmedQuery || results.length > 0) return [];
+    const words = trimmedQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    return NAV_VIEWS.filter((view) => {
+      const haystack = `${view.label} ${view.keywords} ${view.filter}`.toLowerCase();
+      return words.every((word) => haystack.includes(word));
+    }).map((view) => ({ kind: "nav", filter: view.filter, label: view.label }));
+  }, [trimmedQuery, results.length]);
+
   // The create row sits after the search results so the default highlight stays
   // on the best existing match — typing "buy milk" to complete a task must not
   // create a second one. When nothing matches, it is the only row and Enter
@@ -156,8 +188,9 @@ export default function CommandPalette({
   const items = useMemo<PaletteItem[]>(() => {
     const list: PaletteItem[] = results.map((task) => ({ kind: "task", task }));
     if (showCreate) list.push({ kind: "create" });
+    for (const row of navRows) list.push(row);
     return list;
-  }, [results, showCreate]);
+  }, [results, showCreate, navRows]);
   const createIndex = showCreate ? results.length : -1;
 
   useEffect(() => {
@@ -178,6 +211,21 @@ export default function CommandPalette({
     onClose();
   };
 
+  const activate = (item: PaletteItem) => {
+    if (item.kind === "create") {
+      onCreateTask(trimmedQuery);
+    } else if (item.kind === "nav") {
+      // A view jump replaces whatever the sidebar was showing, so the search
+      // box is cleared with it — otherwise the new view opens already filtered
+      // by the word that got the user here ("trash") and looks empty.
+      onNavigate(item.filter);
+      onSearch("");
+    } else {
+      onToggleComplete(item.task, !item.task.completed);
+    }
+    onClose();
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -187,13 +235,15 @@ export default function CommandPalette({
       setActiveIndex((i) => (i - 1 + Math.max(1, items.length)) % Math.max(1, items.length));
     } else if (e.key === "Enter" && items[activeIndex]) {
       e.preventDefault();
+      activate(items[activeIndex]);
+    } else if (e.key === "Tab" && items[activeIndex]) {
+      // The footer has always advertised "tab to open", but no Tab handler
+      // existed: focus just slid into the row's buttons and the highlighted
+      // task was never opened, so `openTask` had no keyboard path at all.
+      e.preventDefault();
       const item = items[activeIndex];
-      if (item.kind === "create") {
-        onCreateTask(trimmedQuery);
-      } else {
-        onToggleComplete(item.task, !item.task.completed);
-      }
-      onClose();
+      if (item.kind === "task") openTask(item.task);
+      else activate(item);
     }
   };
 
@@ -201,6 +251,8 @@ export default function CommandPalette({
   const activeDescendant = activeItem
     ? activeItem.kind === "create"
       ? "command-palette-option-create"
+      : activeItem.kind === "nav"
+      ? `command-palette-option-nav-${activeItem.filter}`
       : `command-palette-option-${activeItem.task.id}`
     : undefined;
 
@@ -344,6 +396,31 @@ export default function CommandPalette({
               </button>
             </div>
           )}
+          {navRows.map((row, i) => {
+            if (row.kind !== "nav") return null;
+            const idx = (createIndex !== -1 ? createIndex + 1 : results.length) + i;
+            return (
+              <div
+                key={row.filter}
+                id={`command-palette-option-nav-${row.filter}`}
+                ref={idx === activeIndex ? activeRef : null}
+                role="option"
+                aria-selected={idx === activeIndex}
+                className={cn("rounded-md mt-1", idx === activeIndex && "bg-muted")}
+                onMouseEnter={() => setActiveIndex(idx)}
+              >
+                <button
+                  type="button"
+                  onClick={() => activate(row)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left"
+                >
+                  <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate text-sm font-medium">{row.label}</span>
+                  <CornerDownLeft className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              </div>
+            );
+          })}
         </div>
         <div className="flex items-center justify-between gap-2 border-t px-4 py-2 text-[11px] text-muted-foreground">
           <span>

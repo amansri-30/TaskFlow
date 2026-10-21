@@ -59,7 +59,9 @@ function taskMeta(t: Task): string {
     // date never reads one way in the palette and another in the list.
     parts.push(deferLabel(t.scheduledAt));
   }
-  if (t.recurrence && t.recurrence !== "none") parts.push(t.recurrence);
+  if (t.recurrence && t.recurrence !== "none") {
+    parts.push(t.repeatUntil ? `${t.recurrence} until ${deferLabel(t.repeatUntil)}` : t.recurrence);
+  }
   if (t.remindAt && !isNaN(new Date(t.remindAt).getTime())) {
     parts.push(`remind ${reminderLabel(t.remindAt)}`);
   }

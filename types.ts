@@ -47,6 +47,7 @@ export type Task = {
   completedAt?: string | null;
   recurrence?: Recurrence;
   monthlyDay?: number;
+  repeatUntil?: string | null;
   tags?: string[];
   subtasks?: Subtask[];
   pinned?: boolean;

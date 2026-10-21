@@ -3,11 +3,23 @@ import connectDB from "../../lib/connectDB";
 import Feedback from "@/models/feedbackModel";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
+import { rateLimit, clientKey } from "@/lib/rateLimit";
 
 const feedbackHandler = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
+
+    // Unauthenticated write with validation but no volume cap: bound it at the
+    // edge of the handler so a scripted loop cannot fill the collection.
+    if (!rateLimit(`feedback:${clientKey(req)}`, 5, 10 * 60_000)) {
+      return handleRes(
+        res,
+        429,
+        false,
+        "Too many submissions. Please try again in a few minutes."
+      );
+    }
 
     const { email, message } = req.body || {};
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

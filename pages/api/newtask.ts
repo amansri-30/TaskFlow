@@ -14,7 +14,7 @@ const newTask = catchAsyncError(
 
     await connectDB();
 
-    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt, remindAt } = req.body || {};
+    const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, monthlyDay, completed, completedAt, pinned, subtasks, trashed, trashedAt, remindAt, repeatUntil } = req.body || {};
 
     if (typeof taskTitle !== "string" || !taskTitle.trim())
       return handleRes(res, 400, false, "Task Title is required");
@@ -67,6 +67,16 @@ const newTask = catchAsyncError(
     if (!user) return handleRes(res, 401, false, "No account is logged in");
 
     const effectiveRecurrence = recurrence || "none";
+    // Same contract as PUT: an end date on a non-repeating task is meaningless,
+    // so it is stripped rather than stored to reappear if recurrence is set later.
+    let resolvedRepeatUntil: Date | null = null;
+    if (effectiveRecurrence !== "none" && repeatUntil) {
+      const parsedUntil = new Date(repeatUntil);
+      if (isNaN(parsedUntil.getTime())) {
+        return handleRes(res, 400, false, "Invalid repeat-until date");
+      }
+      resolvedRepeatUntil = parsedUntil;
+    }
     const clientMonthlyDay =
       Number.isInteger(monthlyDay) && effectiveRecurrence === "monthly"
         ? Math.min(31, Math.max(1, monthlyDay))
@@ -129,6 +139,7 @@ const newTask = catchAsyncError(
       list: normalizedList,
       priority: priority || "medium",
       recurrence: effectiveRecurrence,
+      repeatUntil: resolvedRepeatUntil,
       monthlyDay: resolvedMonthlyDay,
       tags: normalizeTags(tags),
       subtasks: normalizeSubtasks(subtasks),

@@ -25,6 +25,7 @@ const mapTask = (t: any) => ({
   completedAt: t.completedAt,
   recurrence: t.recurrence,
   monthlyDay: t.monthlyDay,
+  repeatUntil: t.repeatUntil || null,
   tags: t.tags || [],
   subtasks: (t.subtasks || []).map((s: any) => ({
     id: s._id ? s._id.toString() : s.id,
@@ -125,7 +126,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PUT": {
-      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay, remindAt } = req.body || {};
+      const { taskTitle, description, notes, dueDate, list, priority, recurrence, tags, subtasks, monthlyDay, remindAt, repeatUntil } = req.body || {};
       const validPriorities = ["low", "medium", "high"];
       // `priority &&` let an explicit `null` through the guard untouched, and
       // the assignment below then wrote it -- Mongoose's enum validator skips
@@ -170,6 +171,23 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // the next completion spawned the occurrence back on the 1st.
         setMonthlyDay(task, dueDate);
       }
+      // Repeat-until is an attribute of the series, so it is accepted for any
+      // recurrence (including "none", which clears it) and stripped whenever
+      // the stored recurrence is none — an end date on a non-repeating task is
+      // meaningless state that would silently reappear if recurrence is set
+      // again later.
+      if (repeatUntil !== undefined) {
+        if (repeatUntil === null || repeatUntil === "") {
+          task.repeatUntil = null;
+        } else {
+          const parsedUntil = new Date(repeatUntil);
+          if (isNaN(parsedUntil.getTime())) {
+            return handleRes(res, 400, false, "Invalid repeat-until date");
+          }
+          task.repeatUntil = parsedUntil;
+        }
+      }
+      if (task.recurrence === "none") task.repeatUntil = null;
       if (tags !== undefined) task.tags = normalizeTags(tags);
       if (subtasks !== undefined) task.subtasks = normalizeSubtasks(subtasks);
       if (remindAt !== undefined) {
@@ -459,7 +477,12 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           const baseDate =
             scheduled && scheduled.getTime() > now.getTime() ? scheduled : now;
           const nextDue = nextOccurrenceDate(baseDate, task.recurrence, task.monthlyDay);
-          if (nextDue) {
+          // The series can have an end: once the next occurrence would land
+          // past `repeatUntil`, this completion is the last one and no
+          // successor is spawned.
+          const until = task.repeatUntil instanceof Date ? task.repeatUntil : null;
+          const pastRepeatUntil = !!until && !!nextDue && nextDue.getTime() > until.getTime();
+          if (nextDue && !pastRepeatUntil) {
             // Drop sub-second precision so two requests completing the same task
             // within one second derive an identical nextDue and collide on the
             // partial unique index below, instead of each spawning an occurrence
@@ -549,6 +572,17 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     case "DELETE": {
       const permanent = req.query.permanent === "true";
       if (permanent) {
+        // Take the chain's pending occurrence with it. Completing a recurring
+        // task spawns a successor tagged with this task's id; hard-deleting the
+        // parent left that successor behind as a phantom future task with a
+        // dangling reference — the user deletes their recurring task and a copy
+        // keeps appearing on the due date. Completed occurrences are history
+        // and stay.
+        await Task.deleteMany({
+          user: task.user,
+          baseTaskId: task._id,
+          completed: false,
+        });
         await task.deleteOne();
         return handleRes(res, 200, true, "Task permanently deleted");
       }

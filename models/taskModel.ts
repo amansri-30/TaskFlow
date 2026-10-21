@@ -68,6 +68,12 @@ const TaskSchema = new mongoose.Schema({
     enum: ["none", "daily", "weekly", "monthly"],
     default: "none",
   },
+  // Optional end of a repeat series. While null the series is open-ended; once
+  // set, completing the task no longer spawns occurrences dated past it.
+  repeatUntil: {
+    type: Date,
+    default: null,
+  },
   tags: {
     type: [String],
     default: () => [],

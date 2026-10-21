@@ -1905,6 +1905,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
     priority: string;
     recurrence: Recurrence;
     monthlyDay?: number | null;
+    repeatUntil?: string | null;
     tags: string[];
     subtasks?: Subtask[];
     completed?: boolean;
@@ -1969,6 +1970,13 @@ function deferAnchor(task: Task, dueIso: string | null) {
     if (Number.isInteger(item.monthlyDay) && item.monthlyDay >= 1 && item.monthlyDay <= 31) {
       monthlyDay = item.monthlyDay;
     }
+    // End of the repeat series: only meaningful (and only kept) when the import
+    // actually repeats; an invalid date is dropped rather than aborting the row.
+    let repeatUntil: string | null = null;
+    if (recurrence !== "none" && item.repeatUntil) {
+      const d = new Date(item.repeatUntil);
+      if (!isNaN(d.getTime())) repeatUntil = d.toISOString();
+    }
     // Preserve lifecycle fields on a reimport so a backup round-trip doesn't
     // resurrect completed/pinned work as brand-new open tasks.
     let completedAt: string | null = null;
@@ -2009,6 +2017,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
       list,
       priority,
       recurrence,
+      repeatUntil,
       monthlyDay,
       tags: normalizeTags(item.tags),
       subtasks,
@@ -2197,6 +2206,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
     list: task.list,
     priority: task.priority || "medium",
     recurrence: task.recurrence || "none",
+    repeatUntil: task.repeatUntil || null,
     tags: task.tags || [],
     subtasks: (task.subtasks || []).map((s) => ({ ...s })),
     monthlyDay: task.recurrence === "monthly" ? task.monthlyDay : undefined,

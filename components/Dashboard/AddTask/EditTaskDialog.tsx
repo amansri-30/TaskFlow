@@ -79,6 +79,14 @@ export function EditTaskDialogContent({
     return isNaN(d.getTime()) ? "" : toLocalInputValue(d);
   });
   const [remindAt, setRemindAt] = useState(initialRemindAt);
+  // End of the repeat series, as a local YYYY-MM-DD value for <input type="date">.
+  const [repeatUntil, setRepeatUntil] = useState(() => {
+    if (!task.repeatUntil) return "";
+    const d = new Date(task.repeatUntil);
+    if (isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  });
   const [isSaving, setIsSaving] = useState(false);
   const customLists = useCustomLists();
   const listOptions = Array.from(
@@ -124,6 +132,14 @@ export function EditTaskDialogContent({
         priority,
         dueDate: selectedDate ? selectedDate.toISOString() : null,
         recurrence,
+        // Always sent: switching recurrence off clears the end date (the API
+        // strips it for a non-repeating task anyway), and leaving it out on a
+        // recurrence edit would keep a stale end date on the series. Parsed as
+        // local end-of-day, matching how the date picker is read.
+        repeatUntil:
+          recurrence !== "none" && repeatUntil
+            ? new Date(`${repeatUntil}T23:59:59.999`).toISOString()
+            : null,
         tags: normalizeTags(tagsText),
         monthlyDay:
           recurrence === "monthly" && selectedDate
@@ -275,6 +291,36 @@ export function EditTaskDialogContent({
             </SelectContent>
           </Select>
         </div>
+
+        {recurrence !== "none" && (
+          <div className="flex items-center gap-4">
+            <div className="flex justify-center items-center gap-1">
+              <Repeat />
+              <Label htmlFor="repeat-until" className="text-right">
+                Until
+              </Label>
+            </div>
+            <Input
+              id="repeat-until"
+              type="date"
+              value={repeatUntil}
+              onChange={(e) => setRepeatUntil(e.target.value)}
+              className="min-w-[150px]"
+              aria-label="Repeat until date (leave empty for no end)"
+            />
+            {repeatUntil && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setRepeatUntil("")}
+              >
+                No end
+              </Button>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-4">
           <div className="flex justify-center items-center gap-1">

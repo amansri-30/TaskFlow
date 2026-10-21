@@ -3,6 +3,7 @@ import connectDB from "../../lib/connectDB";
 import Subscriber from "@/models/subscriberModel";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
+import { rateLimit, clientKey } from "@/lib/rateLimit";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -10,6 +11,17 @@ const subscribeHandler = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
+
+    // Unauthenticated write: distinct emails alone do not bound it, since a
+    // script can mint new ones as fast as the network allows.
+    if (!rateLimit(`subscribe:${clientKey(req)}`, 10, 10 * 60_000)) {
+      return handleRes(
+        res,
+        429,
+        false,
+        "Too many attempts. Please try again in a few minutes."
+      );
+    }
 
     const { email } = req.body || {};
     if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email.trim())) {

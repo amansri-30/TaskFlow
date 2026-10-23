@@ -50,6 +50,20 @@ function write(lists: string[]) {
   listeners.forEach((listener) => listener());
 }
 
+// Another tab writing the same key fires `storage` only in the *other* tabs,
+// which is exactly where this module's own listener set never reached: `write`
+// notifies same-tab subscribers, but a second tab kept serving its `cache`
+// forever, so a list created on one side never appeared on the other and a
+// deleted one stayed in the sidebar until reload. Invalidate the cache on the
+// event and let subscribers re-read.
+let storageBound = false;
+function handleStorage(event: StorageEvent) {
+  // `key === null` means clear(); both invalidate the cached array.
+  if (event.key !== null && event.key !== STORAGE_KEY) return;
+  cache = null;
+  listeners.forEach((listener) => listener());
+}
+
 export function getCustomLists(): string[] {
   return read();
 }
@@ -76,7 +90,17 @@ export function removeCustomList(name: string): string[] {
 
 export function subscribeCustomLists(listener: () => void): () => void {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  if (typeof window !== "undefined" && !storageBound) {
+    window.addEventListener("storage", handleStorage);
+    storageBound = true;
+  }
+  return () => {
+    listeners.delete(listener);
+    if (typeof window !== "undefined" && storageBound && listeners.size === 0) {
+      window.removeEventListener("storage", handleStorage);
+      storageBound = false;
+    }
+  };
 }
 
 const EMPTY_SERVER_SNAPSHOT: string[] = [];

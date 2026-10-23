@@ -40,6 +40,7 @@ Undo2,
   StickyNote,
   Bell,
   BellRing,
+  Clock,
   CalendarClock,
   Hash,
   Plus,
@@ -1004,6 +1005,38 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       toast.success("Reminder dismissed");
     } catch {
       toast.error("Could not dismiss reminder");
+    }
+  };
+
+  // Snooze re-arms the reminder at a new instant. It is a normal reminder edit
+  // (PUT), not a new endpoint: the server already validates that the time is in
+  // the future and clears the acknowledgement stamp, which is exactly what is
+  // needed to make a dismissed reminder ring again.
+  const handleSnoozeReminder = async (task: Task, until: Date) => {
+    if (!beginOp(task.id)) {
+      toast.error("Wait for the current update to finish");
+      return;
+    }
+    const previousTask = tasks.find((t) => t.id === task.id) ?? task;
+    const iso = until.toISOString();
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === task.id ? { ...t, remindAt: iso, remindedAt: null } : t
+      )
+    );
+    try {
+      await axios.put(`/api/task/${task.id}`, { remindAt: iso });
+      toast.success(`Reminder snoozed (${reminderLabel(iso)})`);
+    } catch {
+      // Field-scoped rollback, like the other reminder handlers.
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id ? { ...t, ...reminderFields(previousTask) } : t
+        )
+      );
+      toast.error("Could not snooze reminder");
+    } finally {
+      endOp(task.id);
     }
   };
 
@@ -3099,6 +3132,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
                           onRefresh={refresh}
                           onSetReminder={handleSetReminder}
                           onDismissReminder={handleDismissReminder}
+                          onSnoozeReminder={handleSnoozeReminder}
                           onEnableReminders={requestReminderPermission}
                           onDefer={handleDefer}
                           remindersSupported={remindersSupported}
@@ -3132,6 +3166,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
                     onRefresh={refresh}
                     onSetReminder={handleSetReminder}
                     onDismissReminder={handleDismissReminder}
+                    onSnoozeReminder={handleSnoozeReminder}
                     onEnableReminders={requestReminderPermission}
                     onDefer={handleDefer}
                     remindersSupported={remindersSupported}
@@ -3174,6 +3209,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
                     onRefresh={refresh}
                     onSetReminder={handleSetReminder}
                     onDismissReminder={handleDismissReminder}
+                    onSnoozeReminder={handleSnoozeReminder}
                     onEnableReminders={requestReminderPermission}
                     onDefer={handleDefer}
                     remindersSupported={remindersSupported}
@@ -3251,6 +3287,7 @@ function TaskItem({
   onRefresh,
   onSetReminder,
   onDismissReminder,
+  onSnoozeReminder,
   onEnableReminders,
   onDefer,
   remindersSupported,
@@ -3269,6 +3306,7 @@ function TaskItem({
   onRefresh: () => void;
   onSetReminder: (task: Task, remindAt: string | null) => void;
   onDismissReminder: (task: Task) => void;
+  onSnoozeReminder: (task: Task, until: Date) => void;
   onEnableReminders: () => void;
   onDefer: (task: Task, dueIso: string | null) => void;
   remindersSupported: boolean;
@@ -3556,6 +3594,7 @@ function TaskItem({
             remindAt={task.remindAt}
             due={reminderDue}
             onDismiss={() => onDismissReminder(task)}
+            onSnooze={(until) => onSnoozeReminder(task, until)}
           />
         )}
         {task.recurrence && task.recurrence !== "none" && (
@@ -3779,10 +3818,12 @@ function ReminderChip({
   remindAt,
   due,
   onDismiss,
+  onSnooze,
 }: {
   remindAt: string;
   due: boolean;
   onDismiss: () => void;
+  onSnooze: (until: Date) => void;
 }) {
   const when = new Date(remindAt);
   const title = isNaN(when.getTime())
@@ -3799,6 +3840,44 @@ function ReminderChip({
     >
       <Bell className="h-3 w-3" />
       {reminderLabel(remindAt)}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            aria-label="Snooze reminder"
+            title="Snooze"
+            onClick={(e) => e.stopPropagation()}
+            className="rounded-full p-0.5 hover:bg-black/10 dark:hover:bg-white/10"
+          >
+            <Clock className="h-3 w-3" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-40"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <DropdownMenuLabel>Snooze reminder</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => onSnooze(new Date(Date.now() + 10 * 60_000))}
+          >
+            10 minutes
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => onSnooze(new Date(Date.now() + 60 * 60_000))}
+          >
+            1 hour
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              const tomorrow = resolveReminderAt("tomorrow");
+              if (tomorrow) onSnooze(tomorrow);
+            }}
+          >
+            Tomorrow morning
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <button
         aria-label="Dismiss reminder"
         onClick={(e) => {

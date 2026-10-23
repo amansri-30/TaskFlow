@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useState } from "react";
 import { X } from "lucide-react";
 import { Badge } from "../../ui/badge";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
@@ -39,6 +39,10 @@ export const SideBarItems = ({
   stats: TaskStats;
 }) => {
   const customLists = useCustomLists();
+  // Controlled so the create dialog can close itself after a successful save.
+  // Uncontrolled, it stayed open on an emptied form and the new list appeared
+  // behind the modal, which read as the create having done nothing.
+  const [createListOpen, setCreateListOpen] = useState(false);
 
   return (
     <>
@@ -144,13 +148,13 @@ export const SideBarItems = ({
         </div>
       ))}
 
-      <Dialog>
+      <Dialog open={createListOpen} onOpenChange={setCreateListOpen}>
         <DialogTrigger asChild>
           <Button className="mb-2 py-2" variant={"outline"}>
             Create Custom list <AddCircleIcon className="mx-1 w-5 h-5" />
           </Button>
         </DialogTrigger>
-        <CreateListDialog />
+        <CreateListDialog onCreated={() => setCreateListOpen(false)} />
       </Dialog>
 
       <Separator />

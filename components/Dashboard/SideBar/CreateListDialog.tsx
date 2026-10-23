@@ -13,7 +13,11 @@ import React, { useState } from "react";
 import toast from "react-hot-toast";
 import { addCustomList } from "@/lib/customLists";
 
-export default function CreateListDialog() {
+export default function CreateListDialog({
+  onCreated,
+}: {
+  onCreated?: () => void;
+}) {
   const [listName, setListName] = useState("");
 
   function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -32,6 +36,7 @@ export default function CreateListDialog() {
     }
     toast.success(`List "${listName.trim()}" created`);
     setListName("");
+    onCreated?.();
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {

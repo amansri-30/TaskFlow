@@ -56,12 +56,11 @@ const newTask = catchAsyncError(
         resolvedCompletedAt = new Date();
       }
     }
-    if (description && String(description).length > 100) {
-      return handleRes(res, 400, false, "Description cannot exceed 100 characters");
-    }
-    if (notes && String(notes).length > 4000) {
-      return handleRes(res, 400, false, "Notes cannot exceed 4000 characters");
-    }
+    // Description and notes are truncated, not rejected. PUT has always sliced
+    // both (100 / 4000), and the import path normalizes the same way, so
+    // rejecting here made create the odd entry point out: a duplicate or
+    // backup carrying a long note failed with a 400 while the identical edit
+    // was stored silently truncated.
 
     const user = await isAuthenticated(req, res);
     if (!user) return handleRes(res, 401, false, "No account is logged in");
@@ -125,7 +124,7 @@ const newTask = catchAsyncError(
 
     await Task.create({
       title: normalizedTitle,
-      description: description || "",
+      description: description ? String(description).slice(0, 100) : "",
       notes: typeof notes === "string" ? notes.slice(0, 4000) : "",
       user: user._id,
       // Validated above, so Mongoose receives a real Date or null rather than a

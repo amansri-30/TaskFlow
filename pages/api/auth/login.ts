@@ -6,6 +6,8 @@ import { NextApiRequest, NextApiResponse } from "next";
 import bcrypt from "bcrypt";
 import { saveCookie } from "@/lib/saveCookies";
 import generateJWTToken from "@/lib/generateJwtToken";
+import { toPublicUser } from "@/lib/publicUser";
+import { rateLimit, clientKey } from "@/lib/rateLimit";
 
 
 // A real bcrypt hash of a value nobody can supply. Comparing against it when
@@ -31,6 +33,13 @@ const lockoutDuration = (lockoutCount: number) =>
 const logIn = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST") return handleRes(res, 405, false, "Only post request is allowed");
+
+    // Per-account lockout bounds guesses against one address, but an attacker
+    // can rotate addresses freely from a single host. This caps the source:
+    // generous enough for a shared office/NAT IP, far below spray volume.
+    if (!rateLimit(`login:${clientKey(req)}`, 30, 15 * 60_000)) {
+      return handleRes(res, 429, false, "Too many attempts. Please try again later");
+    }
 
     const {email, password} = req.body || {};
     // Type-check, not just truthiness: `bcrypt.compare` rejects a non-string
@@ -131,7 +140,7 @@ const logIn = catchAsyncError(
     res.status(200).json({
       success: true,
       message: `Welcome back ${user.name}`,
-      user
+      user: toPublicUser(user)
     })
   }
 );

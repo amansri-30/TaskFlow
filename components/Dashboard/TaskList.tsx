@@ -1040,6 +1040,10 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       if (parsed.recurrence === "monthly" && parsed.dueDate) {
         payload.monthlyDay = parsed.dueDate.getDate();
       }
+      // Bounded series, e.g. "water plants every week until friday".
+      if (parsed.repeatUntil) {
+        payload.repeatUntil = parsed.repeatUntil.toISOString();
+      }
     }
     await axios.post("/api/newtask", payload);
     return true;
@@ -2481,7 +2485,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
             <Input
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
-              placeholder={'Add a task and press Enter  (try "Pay rent tomorrow #home !high every month")'}
+              placeholder={'Add a task and press Enter  (try "Water plants every week until friday #garden")'}
               aria-label="Quick add task"
               className="flex-1"
             />
@@ -3555,7 +3559,7 @@ function TaskItem({
           />
         )}
         {task.recurrence && task.recurrence !== "none" && (
-          <RecurrenceLabel recurrence={task.recurrence} />
+          <RecurrenceLabel recurrence={task.recurrence} repeatUntil={task.repeatUntil} />
         )}
         <Dialog>
           <DialogTrigger asChild>
@@ -3839,14 +3843,22 @@ function PriorityChip({
 
 // --------------------------------------------------------------------------------------
 
-function RecurrenceLabel({ recurrence }: { recurrence: Recurrence }) {
+function RecurrenceLabel({
+  recurrence,
+  repeatUntil,
+}: {
+  recurrence: Recurrence;
+  repeatUntil?: string | null;
+}) {
+  const endLabel = repeatUntil ? deferLabel(repeatUntil) : "";
   return (
     <span
       className="flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs text-violet-700 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300"
-      title={`Repeats ${recurrence}`}
+      title={endLabel ? `Repeats ${recurrence} until ${endLabel}` : `Repeats ${recurrence}`}
     >
       <Repeat className="h-3 w-3" />
       {recurrence}
+      {endLabel && <span className="opacity-70">· until {endLabel}</span>}
     </span>
   );
 }

@@ -6,11 +6,19 @@ import User from "@/models/userModel";
 import { passwordPolicyError } from "@/lib/passwordPolicy";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
+import { rateLimit, clientKey } from "@/lib/rateLimit";
 
 const resetPassword = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
+
+    // A 256-bit token is not guessable, but each attempt still costs a Mongo
+    // conditional update plus a bcrypt hash. Cap the source so the endpoint
+    // cannot be used as a compute/DB amplifier.
+    if (!rateLimit(`reset:${clientKey(req)}`, 10, 10 * 60_000)) {
+      return handleRes(res, 429, false, "Too many attempts. Please try again later");
+    }
 
     const { token, password } = req.body || {};
     if (!token || typeof token !== "string" || !password) {

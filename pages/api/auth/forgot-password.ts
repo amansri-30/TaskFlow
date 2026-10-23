@@ -4,6 +4,7 @@ import connectDB from "../../../lib/connectDB";
 import User from "@/models/userModel";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
+import { rateLimit, clientKey } from "@/lib/rateLimit";
 
 // One string, used at every return site that must look identical. The three
 // paths below used to vary the final word -- "issued" for an unknown address,
@@ -19,6 +20,14 @@ const forgotPassword = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
+
+    // Every call costs a DB read, and in token-exposing demo mode a write that
+    // mints a live reset token. The neutral response intentionally cannot
+    // distinguish addresses, so without this an attacker could spray the whole
+    // user table from one host.
+    if (!rateLimit(`forgot:${clientKey(req)}`, 5, 10 * 60_000)) {
+      return handleRes(res, 429, false, "Too many requests. Please try again later");
+    }
 
     const { email } = req.body || {};
     if (!email || typeof email !== "string" || !email.trim()) {

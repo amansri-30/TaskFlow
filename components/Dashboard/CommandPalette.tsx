@@ -159,7 +159,9 @@ export default function CommandPalette({
         createPreview.dueDate ? deferLabel(createPreview.dueDate) : "",
         createPreview.priority ? `${createPreview.priority} priority` : "",
         createPreview.recurrence
-          ? recurrenceLabel(createPreview.recurrence)
+          ? `${
+              recurrenceLabel(createPreview.recurrence)
+            }${createPreview.repeatUntil ? ` until ${deferLabel(createPreview.repeatUntil)}` : ""}`
           : "",
         createPreview.tags.length
           ? createPreview.tags.map((t) => `#${t}`).join(" ")

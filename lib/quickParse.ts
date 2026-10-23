@@ -13,6 +13,12 @@ export type QuickParseResult = {
   priority: QuickPriority | null;
   /** Repeat cadence named with `daily` / `every day` / `weekly` / `monthly`. */
   recurrence: Recurrence | null;
+  /**
+   * End of the repeat series from `until <day>`, set to the end of that local
+   * day. Never non-null while `recurrence` is null — without a cadence the
+   * `until` phrase stays in the title instead of being stripped.
+   */
+  repeatUntil: Date | null;
 };
 
 const WEEKDAYS = [
@@ -59,10 +65,11 @@ function parseTimeToken(
 /**
  * Turn a one-line "quick add" string into structured task fields, matching the
  * grammar advertised in the capture box: `#tag`, `!high`, `today` / `tomorrow`
- * / a weekday name / `next week`, an optional time such as `6pm` or `18:00`, and
- * a repeat cadence (`daily`, `every day`, `weekly`, `every week`, `monthly`,
- * `every month`). Everything that is not recognised is left in the title, so a
- * stray word is never silently swallowed.
+ * / a weekday name / `next week`, an optional time such as `6pm` or `18:00`, a
+ * repeat cadence (`daily`, `every day`, `weekly`, `every week`, `monthly`,
+ * `every month`), and a repeat end date as `until <day>` (a weekday, `today`,
+ * `tomorrow`, `next week`, or an explicit `YYYY-MM-DD`). Everything that is not
+ * recognised is left in the title, so a stray word is never silently swallowed.
  */
 export function parseQuickAdd(
   input: string,
@@ -72,6 +79,10 @@ export function parseQuickAdd(
   let priority: QuickPriority | null = null;
   let dueDate: Date | null = null;
   let recurrence: Recurrence | null = null;
+  let repeatUntil: Date | null = null;
+  // The raw words behind `until <day>`, kept so the phrase can be put back into
+  // the title when no cadence is present (see the restore step before `title`).
+  let untilWords: string[] = [];
   let time: { hours: number; minutes: number } | null = null;
   const kept: string[] = [];
 
@@ -143,6 +154,58 @@ export function parseQuickAdd(
       continue;
     }
 
+    // `until <day>` bounds the series. Only a day-like target is accepted, so
+    // "wait until the courier calls" keeps every word in the title. The date is
+    // resolved to the end of that local day: "until friday" must still allow an
+    // occurrence that falls on the Friday itself.
+    if (lower === "until") {
+      const targetLower = words[i + 1]?.toLowerCase();
+      let day: Date | null = null;
+      let span = 1;
+      const iso = targetLower
+        ? /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(targetLower)
+        : null;
+      if (iso) {
+        const [year, month, date] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+        const candidate = new Date(year, month - 1, date);
+        // Reject rollovers such as 2026-13-40, which Date would happily accept
+        // as a day in the following year.
+        if (
+          candidate.getFullYear() === year &&
+          candidate.getMonth() === month - 1 &&
+          candidate.getDate() === date
+        ) {
+          day = candidate;
+        }
+      } else if (targetLower === "today") {
+        day = startOfDay(now);
+      } else if (targetLower === "tomorrow") {
+        day = addDays(startOfDay(now), 1);
+      } else if (targetLower === "next" && words[i + 2]?.toLowerCase() === "week") {
+        day = addDays(startOfDay(now), 7);
+        span = 2;
+      } else if (targetLower && WEEKDAYS.indexOf(targetLower) !== -1) {
+        const targetWeekday = WEEKDAYS.indexOf(targetLower);
+        const delta = (targetWeekday - startOfDay(now).getDay() + 7) % 7 || 7;
+        day = addDays(startOfDay(now), delta);
+      }
+
+      if (day) {
+        if (repeatUntil) {
+          // A second `until` is ambiguous; keep it verbatim rather than letting
+          // one silently overwrite the other.
+          for (let k = 0; k < span; k++) kept.push(words[i + k]);
+        } else {
+          const end = new Date(day);
+          end.setHours(23, 59, 59, 999);
+          repeatUntil = end;
+          untilWords = words.slice(i, i + span);
+        }
+        i += span;
+        continue;
+      }
+    }
+
     const weekday = WEEKDAYS.indexOf(lower);
     if (weekday !== -1) {
       // The next occurrence of that weekday, never today.
@@ -182,6 +245,14 @@ export function parseQuickAdd(
     dueDate = new Date(now.getTime() + 60_000);
   }
 
+  // An end date only means something for a repeating task. Without a cadence
+  // the `until <day>` phrase goes back into the title (normally at the end,
+  // where it was typed) rather than being swallowed and discarded.
+  if (repeatUntil && !recurrence) {
+    kept.push(...untilWords);
+    repeatUntil = null;
+  }
+
   const title = kept.join(" ").trim();
-  return { title: title || input.trim(), dueDate, tags, priority, recurrence };
+  return { title: title || input.trim(), dueDate, tags, priority, recurrence, repeatUntil };
 }

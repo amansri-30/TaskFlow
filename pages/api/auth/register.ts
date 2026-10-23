@@ -5,12 +5,21 @@ import { catchAsyncError } from "@/middleware/catchAsyncError";
 import { handleRes } from "@/middleware/resHandler";
 import User from "@/models/userModel";
 import { passwordPolicyError } from "@/lib/passwordPolicy";
+import { toPublicUser } from "@/lib/publicUser";
+import { rateLimit, clientKey } from "@/lib/rateLimit";
 import { NextApiRequest, NextApiResponse } from "next";
 import bcrypt from "bcrypt";
 
 const registerUser = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST") return handleRes(res, 405, false, "Only POST request is allowed");
+
+    // Registration answers "Email already registered" (standard UX), which is
+    // also an existence oracle; capping attempts per source keeps it from being
+    // turned into a bulk email-harvesting tool.
+    if (!rateLimit(`register:${clientKey(req)}`, 10, 15 * 60_000)) {
+      return handleRes(res, 429, false, "Too many attempts. Please try again later");
+    }
 
     const { name, email, password } = req.body || {};
     if (!name || !email || !password) return handleRes(res, 400, false, "All fields required!");
@@ -32,12 +41,11 @@ const registerUser = catchAsyncError(
 
     const token = generateJWTToken(user._id);
     saveCookie(res, token, true);
-    user.password = undefined;
 
     return res.status(200).json({
       success: true,
       message: "Registered successfully",
-      user
+      user: toPublicUser(user)
     });
   }
 );

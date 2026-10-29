@@ -56,7 +56,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { isRecurrence, type Recurrence } from "@/lib/recurrence";
+import { isRecurrence, RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
 import { parseQuickAdd } from "@/lib/quickParse";
 import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
 import {
@@ -564,6 +564,59 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
           // Same schema-default reasoning as priority: `list` is required in the
           // type but defaults in the model.
           patch: { list: previous.get(t.id)?.list ?? "default" },
+        })),
+      });
+    }
+  };
+
+  const handleBatchSetRecurrence = async (recurrence: Recurrence) => {
+    if (selectedTasks.length === 0) return;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
+    const target = selectedTasks;
+    const ids = new Set(target.map((t) => t.id));
+    setTasks((prev) =>
+      prev.map((t) =>
+        ids.has(t.id) ? { ...t, recurrence } : t
+      )
+    );
+    // Recurrence is not a PATCH field, so each row goes out as a PUT. The
+    // monthly anchor is re-derived from the task's own due date on the server
+    // when we pass monthlyDay; passing it explicitly keeps the client's
+    // local-calendar day rather than the server's UTC view.
+    const results = await Promise.allSettled(
+      target.map((t) =>
+        axios.put(`/api/task/${t.id}`, {
+          recurrence,
+          monthlyDay:
+            recurrence === "monthly" && t.scheduledAt
+              ? new Date(t.scheduledAt).getDate()
+              : undefined,
+        })
+      )
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    const fulfilled = target.filter((_, i) => results[i].status === "fulfilled");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      rollbackFields(previous, failedIds, ["recurrence", "monthlyDay"]);
+      toast.error(
+        `Failed to set repeat for ${failed.length} of ${target.length} tasks`
+      );
+    } else {
+      toast.success(
+        `Repeat set to ${recurrence === "none" ? "none" : recurrence} for ${target.length} task${target.length > 1 ? "s" : ""}`
+      );
+    }
+    if (fulfilled.length > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `Undo repeat change (${plural(fulfilled.length, "task")})`,
+        prev: fulfilled.map((t) => ({
+          id: t.id,
+          patch: {
+            recurrence: previous.get(t.id)?.recurrence ?? "none",
+            monthlyDay: previous.get(t.id)?.monthlyDay ?? null,
+          },
         })),
       });
     }
@@ -2704,6 +2757,30 @@ function deferAnchor(task: Task, dueIso: string | null) {
                         <SelectItem value="high">High</SelectItem>
                         <SelectItem value="medium">Medium</SelectItem>
                         <SelectItem value="low">Low</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Repeat className="h-4 w-4 text-muted-foreground" />
+                    <Select
+                      key={`rec-${batchActionNonce}`}
+                      onValueChange={(v) => {
+                        setBatchActionNonce((n) => n + 1);
+                        handleBatchSetRecurrence(v as Recurrence);
+                      }}
+                    >
+                      <SelectTrigger
+                        className="h-8 min-w-[130px]"
+                        aria-label="Set repeat for selected"
+                      >
+                        <SelectValue placeholder="Set repeat" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {RECURRENCE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>

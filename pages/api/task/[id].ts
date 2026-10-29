@@ -302,6 +302,9 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // every future occurrence. moveDueDate reads the OLD date, so the
         // assignment must happen inside it, not before.
         moveDueDate(task, nextDue);
+        // Re-anchor a monthly series on the snoozed date, otherwise the next
+        // completion spawns on the pre-snooze day-of-month.
+        setMonthlyDay(task, nextDue);
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task snoozed until the next occurrence", {
@@ -332,6 +335,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           for (const child of pending) {
             moveDueDate(child, null);
             child.monthlyDay = null;
+            child.repeatUntil = task.repeatUntil || null;
             child.updatedAt = new Date();
             await child.save();
             movedTasks.push(mapTask(child));
@@ -360,6 +364,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             // monthlyDay 15 made the next completion spawn back on the old
             // day, so the chain reverted to the pre-move anchor.
             setMonthlyDay(child, parsed, monthlyDay);
+            child.repeatUntil = task.repeatUntil || null;
             child.updatedAt = new Date();
             await child.save();
             movedTasks.push(mapTask(child));
@@ -529,6 +534,10 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                   remindAt: nextRemindAt,
                   remindedAt: null,
                   monthlyDay: task.monthlyDay,
+                  // Carry the series end date onto the successor, otherwise the
+                  // first completion silently dropped the bound and the task
+                  // kept repeating past "until".
+                  repeatUntil: task.repeatUntil || null,
                   tags: task.tags || [],
                   // Unticked, and without the parent's subtask ids: the parent's
                   // boxes were ticked on the way to completion, so copying them

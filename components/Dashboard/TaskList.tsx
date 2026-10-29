@@ -57,6 +57,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { isRecurrence, RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
+import { tasksToCsv } from "@/lib/csv";
 import { parseQuickAdd } from "@/lib/quickParse";
 import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
 import {
@@ -1435,9 +1436,30 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
   // would miss the rows removed by `removedNextTaskIds` during a batch reopen.
   const dueGroups: DueGroup[] = groupTasksByDue(sortedIncomplete, now);
 
-  const handleExport = () => {    // Export what the user is actually looking at — in the Trash view that's
-    // the trashed tasks, not the active list.
-    const exported = trashView ? trashedFiltered : filtered;
+  // Both exports take the rows on screen, so the file always matches the list
+  // the control sat next to - in the Trash view that is the trashed rows, not
+  // the active list. The active filter is part of the filename, so exports
+  // taken from different views do not overwrite each other in Downloads.
+  const exportRows = () => (trashView ? trashedFiltered : filtered);
+  const exportFileName = (extension: string) => {
+    const view = trashView
+      ? "trash"
+      : filter.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "all";
+    return `taskflow-${view}-${new Date().toISOString().slice(0, 10)}.${extension}`;
+  };
+  const downloadFile = (contents: BlobPart, type: string, name: string) => {
+    const url = URL.createObjectURL(new Blob([contents], { type }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExport = () => {
+    const exported = exportRows();
     if (exported.length === 0) return;
     const payload = {
       app: "TaskFlow",
@@ -1445,18 +1467,28 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
       count: exported.length,
       tasks: exported,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `taskflow-tasks-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
+    downloadFile(
+      JSON.stringify(payload, null, 2),
+      "application/json",
+      exportFileName("json")
+    );
     toast.success(`Exported ${exported.length} task${exported.length > 1 ? "s" : ""}`);
+  };
+
+  // Spreadsheet export. JSON is the backup format the importer round-trips;
+  // CSV is the one that opens in Excel/Sheets/Numbers, which is what people
+  // actually want when they are sharing a list or reporting on it. The BOM
+  // makes Excel decode the file as UTF-8 -- without it, accented titles and
+  // emoji come out as mojibake on open.
+  const handleExportCsv = () => {
+    const exported = exportRows();
+    if (exported.length === 0) return;
+    downloadFile(
+      `\uFEFF${tasksToCsv(exported)}`,
+      "text/csv;charset=utf-8",
+      exportFileName("csv")
+    );
+    toast.success(`Exported ${plural(exported.length, "task")} to CSV`);
   };
 
   const activeList = filter.startsWith("list:")
@@ -2432,15 +2464,39 @@ function deferAnchor(task: Task, dueIso: string | null) {
         <Upload className="mr-1.5 h-4 w-4" />
         {importing ? "Importing..." : "Import"}
       </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={handleExport}
-        disabled={(trashView ? trashedFiltered : filtered).length === 0}
-      >
-        <Download className="mr-1.5 h-4 w-4" />
-        Export
-      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={exportRows().length === 0}
+            aria-label="Export tasks"
+          >
+            <Download className="mr-1.5 h-4 w-4" />
+            Export
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuLabel>Export this view</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={handleExportCsv}>
+            <span className="flex flex-col">
+              <span>CSV (spreadsheet)</span>
+              <span className="text-xs text-muted-foreground">
+                Excel, Sheets, Numbers
+              </span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleExport}>
+            <span className="flex flex-col">
+              <span>JSON (backup)</span>
+              <span className="text-xs text-muted-foreground">
+                Re-importable with Import
+              </span>
+            </span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 

@@ -191,15 +191,21 @@ export function parseQuickAdd(
       }
 
       if (day) {
+        // `span` counts the words AFTER "until" that make up the target
+        // ("friday" = 1, "next week" = 2), so the phrase itself is span + 1
+        // words long. Slicing only `span` words kept "until" and dropped the
+        // day: without a cadence that left a title reading "buy milk until"
+        // and the named day silently vanished.
+        const phrase = words.slice(i, i + span + 1);
         if (repeatUntil) {
           // A second `until` is ambiguous; keep it verbatim rather than letting
           // one silently overwrite the other.
-          for (let k = 0; k < span; k++) kept.push(words[i + k]);
+          kept.push(...phrase);
         } else {
           const end = new Date(day);
           end.setHours(23, 59, 59, 999);
           repeatUntil = end;
-          untilWords = words.slice(i, i + span);
+          untilWords = phrase;
         }
         i += span;
         continue;

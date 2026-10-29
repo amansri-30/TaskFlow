@@ -24,6 +24,11 @@ export default function ForgotPassword() {
   const [alertShown, setAlertShown] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(null);
   const [mailOnly, setMailOnly] = useState(false);
+  // Errors used to reuse the success panel, which then claimed a token had
+  // been generated and displayed even when the request had failed outright (a
+  // 501 from a deployment with no mail transport is the common case). Keep the
+  // failure message so the panel can say what actually happened.
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -35,6 +40,7 @@ export default function ForgotPassword() {
       });
       const token = response.data?.resetToken ?? null;
       setResetToken(token);
+      setErrorMessage(null);
       // A deployed build has no mail transport wired up, so the API never
       // hands the token back — it only confirms a request was accepted. Show
       // the same neutral confirmation in both cases.
@@ -48,6 +54,10 @@ export default function ForgotPassword() {
     } catch (error: any) {
       setResetToken(null);
       setMailOnly(false);
+      setErrorMessage(
+        error?.response?.data?.message ||
+          "Something went wrong. Please try again."
+      );
       toast.error(error?.response?.data?.message || "Something went wrong. Please try again.");
       setAlertShown(true);
     } finally {
@@ -94,10 +104,16 @@ export default function ForgotPassword() {
             <AlertBox
               alertShown={alertShown}
               title={
-                mailOnly ? "Check your inbox" : "Reset Token Generated"
+                errorMessage
+                  ? "Reset Request Failed"
+                  : mailOnly
+                  ? "Check your inbox"
+                  : "Reset Token Generated"
               }
               description={
-                mailOnly
+                errorMessage
+                  ? `${errorMessage} No reset token was created, so do not use an older one for this account.`
+                  : mailOnly
                   ? "If an account exists with that email, a reset link is on its way. This deployment has no email service configured, so a link cannot be delivered here — an administrator can enable token display for local testing."
                   : "No email service is configured, so your one-time token is shown here (valid for 60 minutes). Use it on the Reset Password page."
               }

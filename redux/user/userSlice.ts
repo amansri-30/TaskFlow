@@ -160,10 +160,10 @@ const userSlice = createSlice({
       .addCase(logoutUser.rejected, (state, action) => {
         state.isLoading = false;
         state.error = (action.payload as string) || "Logout failed. Please try again.";
-        // The user clearly intends to sign out; don't leave a stale
-        // persisted session that can cause /login <-> /dashboard loops.
-        state.isAuthenticated = false;
-        state.user = null;
+        // Keep the user signed in. A failed request means the server never
+        // cleared the httpOnly cookie, so the session is still live: clearing
+        // `user` here only made the UI claim otherwise, and the next protected
+        // request kept succeeding. The caller navigates away only on success.
       })
 
       .addCase(getCurrentUser.pending, (state) => {

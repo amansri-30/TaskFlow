@@ -157,6 +157,7 @@ export default function CommandPalette({
   const createMeta = createPreview
     ? [
         createPreview.dueDate ? deferLabel(createPreview.dueDate) : "",
+        createPreview.list ? `list: ${createPreview.list}` : "",
         createPreview.priority ? `${createPreview.priority} priority` : "",
         createPreview.recurrence
           ? `${

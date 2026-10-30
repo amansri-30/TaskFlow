@@ -1,4 +1,4 @@
-import { addDays, startOfDay } from "date-fns";
+import { addDays, addMonths, addWeeks, startOfDay, startOfWeek } from "date-fns";
 import type { Recurrence } from "./recurrence";
 
 export type QuickPriority = "low" | "medium" | "high";
@@ -8,6 +8,11 @@ export type QuickParseResult = {
   title: string;
   /** The resolved due date, or null when the input named no day or time. */
   dueDate: Date | null;
+  /**
+   * List typed as `list:<name>`, lowercased to match the sidebar's list
+   * vocabulary (static lists and custom lists are both stored lowercase).
+   */
+  list: string | null;
   /** Raw tags typed as `#tag`, in the order they appeared. */
   tags: string[];
   priority: QuickPriority | null;
@@ -63,9 +68,24 @@ function parseTimeToken(
 }
 
 /**
+ * Saturday of the current week, or next Saturday once today's has passed.
+ *
+ * "This weekend" typed on a Sunday must mean the coming weekend, not the one
+ * that ended yesterday, and typed on a Saturday morning it means today. Shared
+ * by the quick-add grammar and the sidebar's defer preset so the two cannot
+ * disagree about which Saturday "the weekend" is.
+ */
+export function upcomingSaturday(now: Date = new Date()): Date {
+  const today = startOfDay(now);
+  const saturday = addDays(startOfWeek(today, { weekStartsOn: 1 }), 5);
+  return saturday.getTime() < today.getTime() ? addDays(saturday, 7) : saturday;
+}
+
+/**
  * Turn a one-line "quick add" string into structured task fields, matching the
- * grammar advertised in the capture box: `#tag`, `!high`, `today` / `tomorrow`
- * / a weekday name / `next week`, an optional time such as `6pm` or `18:00`, a
+ * grammar advertised in the capture box: `#tag`, `list:<name>`, `!high`,
+ * `today` / `tomorrow` / `weekend` / a weekday name / `next week` / `next
+ * month` / `in 3 days`, an optional time such as `6pm`, `18:00` or `at 6pm`, a
  * repeat cadence (`daily`, `every day`, `weekly`, `every week`, `monthly`,
  * `every month`), and a repeat end date as `until <day>` (a weekday, `today`,
  * `tomorrow`, `next week`, or an explicit `YYYY-MM-DD`). Everything that is not
@@ -78,6 +98,7 @@ export function parseQuickAdd(
   const tags: string[] = [];
   let priority: QuickPriority | null = null;
   let dueDate: Date | null = null;
+  let list: string | null = null;
   let recurrence: Recurrence | null = null;
   let repeatUntil: Date | null = null;
   // The raw words behind `until <day>`, kept so the phrase can be put back into
@@ -91,10 +112,46 @@ export function parseQuickAdd(
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
     const lower = word.toLowerCase();
+    const nextWord = words[i + 1]?.toLowerCase();
 
     if (lower.startsWith("#") && lower.length > 1) {
       tags.push(word.slice(1));
       continue;
+    }
+
+    // `list:<name>` targets a list without first navigating into it. Lowercased
+    // for the same reason custom lists are: the sidebar filter compares names by
+    // character, so `list:Work` and a stored "work" would otherwise be two
+    // different lists that render identically.
+    //
+    // A quoted name may contain spaces (`list:"home office"`). Quoting is only
+    // honoured when the closing quote is actually present further along the
+    // line; otherwise a stray quote would swallow the rest of the title.
+    if (lower.startsWith("list:") && lower.length > "list:".length) {
+      const rawValue = word.slice("list:".length);
+      const quote = rawValue[0];
+      let value = rawValue;
+      if (
+        (quote === '"' || quote === "'") &&
+        !(rawValue.length > 1 && rawValue.endsWith(quote))
+      ) {
+        for (let j = i + 1; j < words.length; j++) {
+          if (words[j].endsWith(quote)) {
+            value = words.slice(i, j + 1).join(" ").slice("list:".length);
+            i = j;
+            break;
+          }
+        }
+      }
+      value = value
+        .replace(/^["']|["']$/g, "")
+        .trim()
+        .toLowerCase()
+        .slice(0, 50);
+      if (value) {
+        list = value;
+        continue;
+      }
     }
 
     if (lower.startsWith("!") && lower.length > 1) {
@@ -116,8 +173,60 @@ export function parseQuickAdd(
       continue;
     }
 
-    if (lower === "next" && words[i + 1]?.toLowerCase() === "week") {
+    // "This weekend" / "next weekend" / "weekend" resolve to the coming
+    // Saturday. Checked before the generic weekday branch because neither word
+    // is a weekday name.
+    if (
+      lower === "weekend" ||
+      ((lower === "this" || lower === "next") && nextWord === "weekend")
+    ) {
+      dueDate = upcomingSaturday(now);
+      if (lower === "this" || lower === "next") i += 1;
+      continue;
+    }
+
+    // Relative offsets: `in 3 days`, `in 2 weeks`, `in a month`. The unit must
+    // be one of the three calendar units the parser understands, so "in 5
+    // minutes" or "in the garage" are left alone rather than half-consumed.
+    if (lower === "in") {
+      const amount =
+        nextWord === "a" || nextWord === "an"
+          ? 1
+          : /^\d{1,3}$/.test(nextWord || "")
+          ? Number(nextWord)
+          : null;
+      const unit = words[i + 2]?.toLowerCase().replace(/s$/, "");
+      if (amount && amount > 0 && (unit === "day" || unit === "week" || unit === "month")) {
+        const today = startOfDay(now);
+        dueDate =
+          unit === "day"
+            ? addDays(today, amount)
+            : unit === "week"
+            ? addWeeks(today, amount)
+            : addMonths(today, amount);
+        i += 2;
+        continue;
+      }
+    }
+
+    // `next <weekday>` and `next month`. The weekday really is the next
+    // occurrence (never today), and consuming the "next" is what keeps it out
+    // of the title: it used to be stripped for "next week" alone, so "next
+    // monday" captured the title "next" instead of the task name.
+    if (lower === "next" && nextWord === "week") {
       dueDate = addDays(startOfDay(now), 7);
+      i += 1;
+      continue;
+    }
+    if (lower === "next" && nextWord === "month") {
+      dueDate = addMonths(startOfDay(now), 1);
+      i += 1;
+      continue;
+    }
+    if (lower === "next" && nextWord && WEEKDAYS.indexOf(nextWord) !== -1) {
+      const targetWeekday = WEEKDAYS.indexOf(nextWord);
+      const delta = (targetWeekday - startOfDay(now).getDay() + 7) % 7 || 7;
+      dueDate = addDays(startOfDay(now), delta);
       i += 1;
       continue;
     }
@@ -125,7 +234,6 @@ export function parseQuickAdd(
     // Repeat cadence. `every` only consumes the next word when it forms a known
     // phrase, so "every other week" leaves "every other week" in the title
     // rather than being half-eaten into a weekly repeat.
-    const nextWord = words[i + 1]?.toLowerCase();
     if (lower === "daily" || lower === "everyday") {
       recurrence = "daily";
       continue;
@@ -220,6 +328,18 @@ export function parseQuickAdd(
       continue;
     }
 
+    // `at 6pm` / `at 18:00`: the preposition is part of how people say a due
+    // time, so it is stripped along with the clock reading instead of being
+    // left behind in the title ("call mom at").
+    if (lower === "at" && nextWord) {
+      const parsedTime = parseTimeToken(nextWord);
+      if (parsedTime) {
+        time = parsedTime;
+        i += 1;
+        continue;
+      }
+    }
+
     const parsedTime = parseTimeToken(lower);
     if (parsedTime) {
       time = parsedTime;
@@ -260,5 +380,5 @@ export function parseQuickAdd(
   }
 
   const title = kept.join(" ").trim();
-  return { title: title || input.trim(), dueDate, tags, priority, recurrence, repeatUntil };
+  return { title: title || input.trim(), dueDate, list, tags, priority, recurrence, repeatUntil };
 }

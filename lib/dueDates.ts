@@ -1,4 +1,5 @@
 import { addDays, startOfDay, startOfWeek, addWeeks, addMonths } from "date-fns";
+import { upcomingSaturday } from "./quickParse";
 
 export type DeferPresetId =
   | "tomorrow"
@@ -78,9 +79,7 @@ export function resolveDeferPreset(
       return guard(keepTime(addDays(today, 1)));
     case "weekend": {
       // Saturday of the current week, but never a weekend day already gone.
-      const saturday = addDays(startOfWeek(today, { weekStartsOn: 1 }), 5);
-      const target = saturday.getTime() < today.getTime() ? addWeeks(saturday, 1) : saturday;
-      return guard(keepTime(target));
+      return guard(keepTime(upcomingSaturday(today)));
     }
     case "next-week": {
       // The Monday of next week — the most common "push it a week" target.

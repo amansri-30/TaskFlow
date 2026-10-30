@@ -59,15 +59,21 @@ export default function SearchAreaWithAvatarDropdown({
   }, []);
 
   const handleLogout = async () => {
-    // Wait for the server to clear the httpOnly cookie before navigating,
-    // otherwise the request is aborted and the session survives.
+    // Navigate only after the server confirms it cleared the httpOnly cookie.
+    // Leaving in `finally` sent the user to the home page while still signed
+    // in, so the next "Login" click bounced straight back to /dashboard. On
+    // failure the session is still live, so the honest state is to stay put
+    // and say so.
     try {
       await dispatch(logoutUser()).unwrap();
       toast.success("Logout Successfully");
-    } catch {
-      toast.error("Logout failed");
-    } finally {
       window.location.replace("/");
+    } catch (err: any) {
+      const message =
+        typeof err === "string" && err
+          ? err
+          : "Logout failed. You are still signed in.";
+      toast.error(message);
     }
   };
 

@@ -141,6 +141,25 @@ const reminderFields = (t: Task) => ({
   remindedAt: t.remindedAt ?? null,
 });
 
+/**
+ * Compact one-line label for the quick-capture preview, e.g.
+ * "Sat, Nov 1 · 9:00 AM". It shows the exact instant that will be stored
+ * rather than the words that were typed, so `at 6pm` and the default 9:00
+ * start are distinguishable before the task is created.
+ */
+function previewDueLabel(date: Date): string {
+  const day = date.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const time = date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${day} · ${time}`;
+}
+
 const GROUP_PREF_KEY = "taskflow:groupByDue";
 
 /**
@@ -825,7 +844,12 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
           // ignore - cookie may already be gone
         }
         toast.error("Your session has expired. Please log in again.");
-        router.replace("/login");
+        // `?expired=1` tells the middleware to let this navigation through even
+        // if the browser still holds a stale `token` cookie (the server never
+        // saw it or rejected it). Without it the login page would bounce
+        // straight back to /dashboard, whose fetch 401s again -- a loop the
+        // user cannot escape without clearing cookies by hand.
+        router.replace("/login?expired=1");
         return;
       }
       setError("Failed fetching tasks. Try refreshing the page.");
@@ -1115,7 +1139,12 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     } else if (filter === "today") {
       payload.dueDate = new Date().toISOString();
     }
-    if (filter.startsWith("list:")) {
+    // An explicit `list:<name>` in the captured text wins over the list filter
+    // the user happens to be looking at: "buy milk list:groceries" typed while
+    // browsing Work means the task belongs to Groceries, not Work.
+    if (parsed.list) {
+      payload.list = parsed.list;
+    } else if (filter.startsWith("list:")) {
       payload.list = filter.slice("list:".length);
     }
     if (tags.length > 0) payload.tags = tags;
@@ -1142,8 +1171,9 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     setQuickAdding(true);
     try {
       // The capture box doubles as a tiny natural-language field: `#tags`,
-      // `!priority`, `today`/`tomorrow`/`next week`/a weekday, and a time such
-      // as `6pm` are lifted out, and whatever remains becomes the title.
+      // `list:<name>`, `!priority`, `today`/`tomorrow`/`weekend`/a weekday,
+      // `next week`/`next month`/`in 3 days`, and a time such as `6pm` or
+      // `at 6pm` are lifted out, and whatever remains becomes the title.
       const created = await submitTaskFromText(raw);
       if (created) {
         setQuickTitle("");
@@ -2500,6 +2530,13 @@ function deferAnchor(task: Task, dueIso: string | null) {
     </>
   );
 
+  // Live preview of what the capture box will create. Parsing is cheap (one
+  // short line, no I/O), so it runs on every render instead of behind a memo.
+  // The chips matter because the grammar is invisible otherwise: there is no
+  // hint that `list:home` retargets the task or that `at 6pm` sets the clock.
+  const quickPreview = quickTitle.trim() ? parseQuickAdd(quickTitle) : null;
+  const quickPreviewTags = quickPreview ? normalizeTags(quickPreview.tags) : [];
+
   return (
     <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
       <CommandPalette
@@ -2541,7 +2578,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
             </Button>
             <Button
               variant="default"
-              onClick={() => router.replace("/login")}
+              // Same middleware bypass as the 401 path: an explicit "Go to
+              // Login" must actually reach the login form even when a stale
+              // `token` cookie is still in the browser, otherwise the auth-route
+              // redirect sends the user straight back to this failing screen.
+              onClick={() => router.replace("/login?expired=1")}
             >
               Go to Login
             </Button>
@@ -2627,7 +2668,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
             <Input
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
-              placeholder={'Add a task and press Enter  (try "Water plants every week until friday #garden")'}
+              placeholder={
+                'Add a task and press Enter  (try "Pay rent tomorrow at 6pm list:home #bills")'
+              }
               aria-label="Quick add task"
               className="flex-1"
             />
@@ -2639,6 +2682,59 @@ function deferAnchor(task: Task, dueIso: string | null) {
               {quickAdding ? "Adding..." : "Add"}
             </Button>
           </form>
+
+          {quickPreview &&
+            (quickPreview.dueDate ||
+              quickPreview.list ||
+              quickPreview.priority ||
+              quickPreview.recurrence ||
+              quickPreviewTags.length > 0) && (
+              <div
+                className="flex flex-wrap items-center gap-1.5 text-xs"
+                aria-live="polite"
+                aria-label="Preview of the task to be added"
+              >
+                {quickPreview.dueDate && (
+                  <span className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 text-muted-foreground">
+                    <CalendarDays className="h-3 w-3" />
+                    {previewDueLabel(quickPreview.dueDate)}
+                  </span>
+                )}
+                {quickPreview.list && (
+                  <span className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 text-muted-foreground">
+                    <ListChecks className="h-3 w-3" />
+                    {quickPreview.list}
+                  </span>
+                )}
+                {quickPreview.priority && (
+                  <span className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 text-muted-foreground">
+                    <Flag className="h-3 w-3" />
+                    {quickPreview.priority} priority
+                  </span>
+                )}
+                {quickPreview.recurrence && (
+                  <span className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 text-muted-foreground">
+                    <Repeat className="h-3 w-3" />
+                    {quickPreview.recurrence}
+                    {quickPreview.repeatUntil
+                      ? ` until ${quickPreview.repeatUntil.toLocaleDateString(
+                          undefined,
+                          { month: "short", day: "numeric" }
+                        )}`
+                      : ""}
+                  </span>
+                )}
+                {quickPreviewTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 text-muted-foreground"
+                  >
+                    <Hash className="h-3 w-3" />
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
 
           {/* Overview / Stats */}
           <section

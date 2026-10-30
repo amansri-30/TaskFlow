@@ -16,7 +16,15 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  if (authRoutes.includes(pathname) && token) {
+  // A stale `token` cookie must not trap the user out of the login form. Both
+  // the 401 handler and the "Go to Login" button navigate with `?expired=1`
+  // after the server has rejected/cleared the session, so that one flag opts
+  // out of the "already signed in" redirect.
+  if (
+    authRoutes.includes(pathname) &&
+    token &&
+    !request.nextUrl.searchParams.has("expired")
+  ) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

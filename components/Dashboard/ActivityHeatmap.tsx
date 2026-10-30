@@ -94,13 +94,12 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
 
   const monthCells: { col: number; label: string }[] = [];
   for (let w = 0; w < WEEKS; w++) {
-    if (w === 0) {
-      monthCells.push({ col: 0, label: SHORT_MONTHS[gridStart.getMonth()] });
-      continue;
-    }
     // A month's label belongs in the column that actually contains that
     // month's 1st day — keying off the column's Monday skips months that
     // start mid-week (e.g. Jul 1 Thu driving the label to the next week).
+    // Week 0 is scanned too: a window that opens on Aug 31 has Sep 1 inside
+    // its first column, and skipping the scan there left September unlabelled
+    // until October.
     for (let d = 0; d < 7; d++) {
       const date = addDays(gridStart, w * 7 + d);
       if (date.getDate() === 1) {
@@ -108,6 +107,12 @@ export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
         break;
       }
     }
+  }
+  // The window normally opens mid-month, so its first column contains no 1st.
+  // Label that column with the starting month unless the scan above already
+  // did (when the 1st fell inside week 0).
+  if (!monthCells.some((cell) => cell.col === 0)) {
+    monthCells.unshift({ col: 0, label: SHORT_MONTHS[gridStart.getMonth()] });
   }
 
   const windowTotal = cells.reduce((sum, cell) => sum + cell.count, 0);

@@ -913,10 +913,20 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   }, []);
 
   const [remindersSupported, setRemindersSupported] = useState(false);
+  // Tracked so the in-app fallback can tell "permission not granted yet" from
+  // "notifications will actually arrive". `Notification.permission` is not
+  // reactive, so a grant via the button below has to be copied into state or
+  // the fallback banner would keep claiming browser alerts are off.
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | "unsupported"
+  >("default");
 
   useEffect(() => {
-    setRemindersSupported(
-      typeof window !== "undefined" && "Notification" in window
+    const supported =
+      typeof window !== "undefined" && "Notification" in window;
+    setRemindersSupported(supported);
+    setNotificationPermission(
+      supported ? Notification.permission : "unsupported"
     );
   }, []);
 
@@ -1024,19 +1034,26 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
 
   const requestReminderPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotificationPermission("unsupported");
       toast.error("This browser cannot show notifications");
       return;
     }
     if (Notification.permission === "granted") {
+      setNotificationPermission("granted");
       toast.success("Reminders are already enabled");
       return;
     }
     const result = await Notification.requestPermission();
+    setNotificationPermission(result);
     if (result === "granted") {
       toast.success("Reminders enabled");
       notifyDueReminders();
     } else {
-      toast.error("Notification permission denied");
+      // A denial is permanent for the origin in every current browser, so there
+      // is no point asking again -- say what still works instead.
+      toast.error(
+        "Browser notifications are blocked. Due reminders will appear in TaskFlow instead."
+      );
     }
   };
 
@@ -1409,6 +1426,21 @@ const matchesSearch = (t: Task) => {
 const filtered = tasks.filter((t) => matchesFilter(t) && matchesSearch(t));
 
 const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : [];
+
+  // Reminders that have come due and were never acknowledged. Normally the 30s
+  // scan delivers a browser notification and stamps them server-side; when the
+  // Notification API is missing or the user blocked the prompt, that scan
+  // returns before doing anything, so a reminder was silent everywhere except a
+  // red chip on its own row -- and only if that row happened to be on screen.
+  // The banner below is the in-app delivery channel for exactly that case.
+  const dueReminders =
+    filter === "trash"
+      ? []
+      : tasks.filter(
+          (t) => !t.completed && isReminderDue(t.remindAt, t.remindedAt)
+        );
+  const reminderFallback =
+    !remindersSupported || notificationPermission !== "granted";
 
   const incomplete = filtered.filter((t) => !t.completed);
   const pinFirst = (a: Task, b: Task) =>
@@ -2373,7 +2405,15 @@ function deferAnchor(task: Task, dueIso: string | null) {
     recurrence: task.recurrence || "none",
     repeatUntil: task.repeatUntil || null,
     tags: task.tags || [],
-    subtasks: (task.subtasks || []).map((s) => ({ ...s })),
+    // Untick the checklist and drop the ids. A copy is a new task with nothing
+    // done yet, but spreading the rows copied `completed` along with the text,
+    // so duplicating a task with every box ticked produced an OPEN task that
+    // already read "3/3 done" -- the same bug the recurrence spawn had. The
+    // server reassigns ids and createdAt, so carrying them over is noise too.
+    subtasks: (task.subtasks || []).map((s) => ({
+      text: s.text,
+      completed: false,
+    })),
     monthlyDay: task.recurrence === "monthly" ? task.monthlyDay : undefined,
     pinned: task.pinned === true,
     // Carry the reminder, but only while it is still in the future — a copy
@@ -3258,6 +3298,92 @@ function deferAnchor(task: Task, dueIso: string | null) {
             </span>
           </div>
 
+          {/* In-app reminder delivery. Only rendered when the browser cannot or
+              will not show system notifications: with permission granted the
+              scan stamps each reminder and pops an OS notification, so a second
+              surface would just duplicate it. */}
+          {reminderFallback && dueReminders.length > 0 && (
+            <section
+              aria-labelledby="due-reminders-heading"
+              className="rounded-lg border border-violet-200 bg-violet-50/70 p-3 dark:border-violet-900 dark:bg-violet-950/30"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <BellRing className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-300" />
+                <h2 id="due-reminders-heading" className="text-sm font-semibold">
+                  {dueReminders.length === 1
+                    ? "1 reminder is due"
+                    : `${dueReminders.length} reminders are due`}
+                </h2>
+                {remindersSupported && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto h-7 px-2 text-xs"
+                    onClick={requestReminderPermission}
+                  >
+                    Enable browser alerts
+                  </Button>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {remindersSupported
+                  ? "Browser notifications are off, so reminders appear here until you snooze or dismiss them."
+                  : "This browser cannot show system notifications, so reminders appear here until you snooze or dismiss them."}
+              </p>
+              <ul className="mt-2 flex flex-col gap-1">
+                {dueReminders.slice(0, 3).map((task) => (
+                  <li
+                    key={task.id}
+                    className="flex flex-wrap items-center gap-1.5"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                      {task.title}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {reminderLabel(task.remindAt)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      onClick={() =>
+                        handleSnoozeReminder(
+                          task,
+                          new Date(Date.now() + 10 * 60_000)
+                        )
+                      }
+                    >
+                      Snooze 10 min
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => handleToggleComplete(task, true)}
+                    >
+                      Done
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 p-0"
+                      aria-label={`Dismiss reminder for ${task.title}`}
+                      title="Dismiss reminder"
+                      onClick={() => handleDismissReminder(task)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              {dueReminders.length > 3 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  +{dueReminders.length - 3} more
+                </p>
+              )}
+            </section>
+          )}
+
           {/* Clear completed confirmation */}
           <Dialog open={confirmClear} onOpenChange={setConfirmClear}>
             <DialogContent className="sm:max-w-[400px]">
@@ -3661,7 +3787,10 @@ function TaskItem({
           // breakpoint where a fine pointer is assumed, so phones and tablets
           // keep the cluster visible — @media (hover: none) never fires the
           // group-hover, which left Edit and Delete permanently invisible.
-          edit ? "" : "opacity-100 md:opacity-0 md:group-hover:opacity-100"
+          // `focus-within` matters because opacity keeps the buttons focusable:
+          // Tab did move into the cluster, but at md+ the user could not see
+          // which icon had focus.
+          edit ? "" : "opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100"
         }`}
       >
         <button
@@ -3885,7 +4014,7 @@ function TaskItem({
               <DialogTitle>Reminder</DialogTitle>
               <DialogDescription>
                 {task.scheduledAt
-                  ? "Reminders notify you in this browser while TaskFlow is open."
+                  ? "Reminders notify you while TaskFlow is open. If browser alerts are off, they still appear above your task list."
                   : "Set a due date to use relative reminders, or pick a custom time."}
               </DialogDescription>
             </DialogHeader>

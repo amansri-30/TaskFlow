@@ -137,11 +137,18 @@ export const SideBarItems = ({
           </button>
           <button
             aria-label={`Delete list ${name}`}
+            title={`Delete list ${name}`}
             onClick={() => {
               removeCustomList(name);
               if (activeFilter === `list:${name}`) onSelectFilter("all");
             }}
-            className="mr-1 hidden p-1 text-muted-foreground transition-colors hover:text-red-600 group-hover:block"
+            // `hidden` is display:none, which also took the button out of the
+            // tab order: deleting a list required a mouse hover, so keyboard
+            // users could create a list but never remove it, and touch screens
+            // (no hover) never revealed it at all. Opacity keeps it focusable
+            // while still staying out of the way until the row is hovered or
+            // one of its controls has focus.
+            className="mr-1 p-1 text-muted-foreground opacity-100 transition-opacity hover:text-red-600 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
           >
             <X className="h-4 w-4" />
           </button>

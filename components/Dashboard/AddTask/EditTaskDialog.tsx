@@ -95,6 +95,19 @@ export function EditTaskDialogContent({
 
   const handleDateSelected: SelectSingleEventHandler = (date) => {
     if (date instanceof Date && !isNaN(date.getTime())) {
+      // The calendar chooses a DAY, but `selectedDate` carries a time-of-day
+      // and handleSave sends the whole instant. Replacing it outright dropped a
+      // 09:00 due time to midnight, which then re-anchored a lead-time reminder
+      // (the server preserves the reminder's distance from the due instant), so
+      // re-picking the same day while renaming could silently move the
+      // reminder. Keep the time the task already had; when there was no date,
+      // the calendar's midnight is the only sensible default.
+      if (selectedDate) {
+        const kept = new Date(date);
+        kept.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
+        setSelectedDate(kept);
+        return;
+      }
       setSelectedDate(date);
     }
   };

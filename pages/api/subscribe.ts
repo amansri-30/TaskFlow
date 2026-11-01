@@ -27,6 +27,11 @@ const subscribeHandler = catchAsyncError(
     if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email.trim())) {
       return handleRes(res, 400, false, "Please enter a valid email address");
     }
+    // RFC 5321 puts the maximum address at 254 characters; the regex accepts a
+    // megabyte of non-space text, and nothing downstream has a length cap.
+    if (email.trim().length > 254) {
+      return handleRes(res, 400, false, "That email address is too long");
+    }
 
     await connectDB();
 

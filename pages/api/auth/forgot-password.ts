@@ -34,6 +34,26 @@ const forgotPassword = catchAsyncError(
       return handleRes(res, 400, false, "Email is required");
     }
 
+    // No email transport is wired up in this deployment, so the reset token
+    // itself is the only delivery channel. Handing it back in the response
+    // would let anyone POST any email address and take over that account, so
+    // the token is minted ONLY when explicitly opted in for local/demo use.
+    //
+    // This capability check runs BEFORE the database lookup. Answering 501 for
+    // a registered address and 200 for an unknown one was an account-existence
+    // oracle -- the exact leak the neutral message below exists to close -- so
+    // an unavailable deployment now answers every caller identically, without
+    // touching the user table at all.
+    const exposeToken = process.env.TASKFLOW_EXPOSE_RESET_TOKEN === "true";
+    if (!exposeToken) {
+      return handleRes(
+        res,
+        501,
+        false,
+        "Password reset is not available on this deployment"
+      );
+    }
+
     await connectDB();
 
     const user = await User.findOne({
@@ -42,25 +62,6 @@ const forgotPassword = catchAsyncError(
 
     if (!user) {
       return handleRes(res, 200, true, NEUTRAL_RESPONSE);
-    }
-
-    // No email transport is wired up in this deployment, so the reset token
-    // itself is the only delivery channel. Handing it back in the response
-    // would let anyone POST any email address and take over that account, so
-    // the token is minted ONLY when explicitly opted in for local/demo use.
-    const exposeToken = process.env.TASKFLOW_EXPOSE_RESET_TOKEN === "true";
-    if (!exposeToken) {
-      // Report the misconfiguration instead of claiming a mail was sent. The
-      // previous "200, reset link sent" was a lie in the strictest sense: no
-      // token was ever written, so no reset could ever be completed, while the
-      // caller had no way to tell. This response does not depend on whether the
-      // address was found, so it carries no enumeration signal.
-      return handleRes(
-        res,
-        501,
-        false,
-        "Password reset is not available on this deployment"
-      );
     }
 
     // Create a one-time reset token (hashed at rest) that expires in 60 minutes.

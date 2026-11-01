@@ -32,7 +32,6 @@ export default function SignUp() {
   const dispatch = useAppDispatch();
   const router = useRouter();
   const isAuthenticated = useAppSelector((state) => state.user?.isAuthenticated);
-  const error = useAppSelector((state) => state.user?.error);
   const isLoading = useAppSelector((state) => state.user?.isLoading);
 
   // A persisted "authenticated" flag alone is not proof of a live session.
@@ -57,12 +56,6 @@ export default function SignUp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (error) {
-      toast.error(error);
-    }
-  }, [error]);
-
   const handleGeneratePassword = () => {
     const newPassword = generatePassword();
     setPassword(newPassword);
@@ -71,7 +64,18 @@ export default function SignUp() {
 
   const SignUpHandler = async (e: FormEvent) => {
     e.preventDefault();
-    dispatch(registerUser({ name: `${firstName} ${lastName}`, email, password }));
+    // Toast from the thunk result, not from a `state.user.error` effect. The
+    // effect only re-runs when the string changes, so submitting twice with the
+    // same failure (the common "email already registered" case) produced no
+    // second toast at all — the button just stopped spinning with no feedback.
+    const result = await dispatch(
+      registerUser({ name: `${firstName} ${lastName}`.trim(), email, password })
+    );
+    if (registerUser.rejected.match(result)) {
+      toast.error(
+        (result.payload as string) || "Sign up failed. Please try again."
+      );
+    }
   };
 
   return (

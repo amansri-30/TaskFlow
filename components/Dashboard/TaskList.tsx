@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { isRecurrence, RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
 import { tasksToCsv } from "@/lib/csv";
+import { csvToTaskSeeds } from "@/lib/csvImport";
 import { parseQuickAdd } from "@/lib/quickParse";
 import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
 import {
@@ -2186,15 +2187,27 @@ function deferAnchor(task: Task, dueIso: string | null) {
     setImporting(true);
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as any;
-      const raw = Array.isArray(parsed)
-        ? parsed
-        : Array.isArray(parsed?.tasks)
-        ? parsed.tasks
-        : null;
-      const items = raw as any[] | null;
+      // JSON is the backup format; CSV is the spreadsheet format and now round
+      // trips too, so exporting a view, editing it in Excel and bringing it
+      // back no longer requires a detour through a JSON editor. The extension
+      // decides when it is present; otherwise a leading `{`/`[` is the tell.
+      const name = file.name.toLowerCase();
+      const isCsv =
+        name.endsWith(".csv") ||
+        (!name.endsWith(".json") && !/^\s*[[{]/.test(text));
+      let items: any[] | null;
+      if (isCsv) {
+        items = csvToTaskSeeds(text);
+      } else {
+        const parsed = JSON.parse(text) as any;
+        items = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.tasks)
+          ? parsed.tasks
+          : null;
+      }
       if (!items) {
-        toast.error("Invalid file: expected a tasks array");
+        toast.error("Invalid file: expected a tasks array or CSV rows");
         return;
       }
       if (items.length === 0) {
@@ -2236,7 +2249,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
       }
       refresh();
     } catch {
-      toast.error("Could not read the file. Make sure it is valid JSON.");
+      toast.error("Could not read the file. Make sure it is valid JSON or CSV.");
     } finally {
       setImporting(false);
     }
@@ -2476,9 +2489,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/json,.json"
+        accept=".json,.csv,application/json,text/csv"
         className="hidden"
-        aria-label="Import tasks from JSON"
+        aria-label="Import tasks from JSON or CSV"
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) handleImportFile(file);
@@ -2490,6 +2503,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
         variant="outline"
         onClick={() => fileInputRef.current?.click()}
         disabled={importing}
+        title="Import tasks from a JSON backup or a CSV spreadsheet"
       >
         <Upload className="mr-1.5 h-4 w-4" />
         {importing ? "Importing..." : "Import"}

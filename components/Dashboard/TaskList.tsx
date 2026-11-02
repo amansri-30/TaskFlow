@@ -58,6 +58,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { isRecurrence, RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
 import { tasksToCsv } from "@/lib/csv";
+import { tasksToIcs } from "@/lib/ics";
+import { notifyTasksChanged } from "@/lib/taskEvents";
 import { csvToTaskSeeds } from "@/lib/csvImport";
 import { parseQuickAdd } from "@/lib/quickParse";
 import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
@@ -1499,7 +1501,7 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
   // would miss the rows removed by `removedNextTaskIds` during a batch reopen.
   const dueGroups: DueGroup[] = groupTasksByDue(sortedIncomplete, now);
 
-  // Both exports take the rows on screen, so the file always matches the list
+  // Every export takes the rows on screen, so the file always matches the list
   // the control sat next to - in the Trash view that is the trashed rows, not
   // the active list. The active filter is part of the filename, so exports
   // taken from different views do not overwrite each other in Downloads.
@@ -1553,6 +1555,51 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
     );
     toast.success(`Exported ${plural(exported.length, "task")} to CSV`);
   };
+
+  // Calendar export. The file opens as a new calendar in Google Calendar,
+  // Apple Calendar and Outlook; each dated task becomes a half-hour event,
+  // with the reminder as an alarm and the cadence as a repeat rule. Rows
+  // without a due date have nowhere to sit on a timeline, so they are counted
+  // and named in the toast rather than silently dropped.
+  const handleExportIcs = () => {
+    const exported = exportRows();
+    if (exported.length === 0) return;
+    const result = tasksToIcs(exported, {
+      calendarName: `TaskFlow (${trashView ? "Trash" : activeFilterLabel})`,
+    });
+    if (result.eventCount === 0) {
+      toast.error(
+        `Nothing to add to a calendar: ${plural(
+          result.skipped,
+          "task"
+        )} ${result.skipped === 1 ? "has" : "have"} no due date`
+      );
+      return;
+    }
+    downloadFile(
+      result.contents,
+      "text/calendar;charset=utf-8",
+      exportFileName("ics")
+    );
+    toast.success(
+      `Exported ${plural(result.eventCount, "event")}${
+        result.skipped > 0
+          ? ` — ${result.skipped} undated skipped`
+          : ""
+      }`
+    );
+  };
+
+  // The bell lives outside this component's tree, so local mutations are
+  // invisible to it. The signature covers exactly the fields its badge counts
+  // -- done, gone, due date -- so pinning a task or editing a note does not
+  // trigger a refetch.
+  const alertSignature = tasks
+    .map((t) => `${t.id}:${t.scheduledAt || ""}:${t.completed ? 1 : 0}`)
+    .join("|");
+  useEffect(() => {
+    notifyTasksChanged();
+  }, [alertSignature]);
 
   const activeList = filter.startsWith("list:")
     ? filter.slice("list:".length)
@@ -2568,6 +2615,14 @@ function deferAnchor(task: Task, dueIso: string | null) {
               <span>CSV (spreadsheet)</span>
               <span className="text-xs text-muted-foreground">
                 Excel, Sheets, Numbers
+              </span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleExportIcs}>
+            <span className="flex flex-col">
+              <span>Calendar (.ics)</span>
+              <span className="text-xs text-muted-foreground">
+                Events, reminders, repeats
               </span>
             </span>
           </DropdownMenuItem>

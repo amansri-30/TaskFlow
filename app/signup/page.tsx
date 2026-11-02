@@ -59,6 +59,10 @@ export default function SignUp() {
   const handleGeneratePassword = () => {
     const newPassword = generatePassword();
     setPassword(newPassword);
+    // A generated password is random and unmemorable, so keeping the field
+    // masked leaves it unreadable at the one moment the user has to save it
+    // somewhere. Reveal it here; the checkbox still lets them hide it again.
+    setShowPassword(true);
     setAlertShown(true);
   };
 

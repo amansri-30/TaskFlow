@@ -7,6 +7,7 @@ import { Separator } from "../ui/separator";
 import { CalendarDays, AlertCircle, CheckCircle2 } from "lucide-react";
 import axios from "axios";
 import { Task } from "@/types";
+import { TASKS_CHANGED_EVENT } from "@/lib/taskEvents";
 import { isSameDay, startOfDay, isBefore } from "date-fns";
 
 import NotificationSnooze01Icon from "@/public/svg/icons/NotificationSnooze01Icon";
@@ -35,9 +36,24 @@ export default function NotificationButton() {
 
   useEffect(() => {
     fetchTasks();
+    // Coalesce bursts: a batch operation commits dozens of rows and each one
+    // used to be a separate reason to refetch the whole list.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefetch = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        fetchTasks();
+      }, 600);
+    };
     const onFocus = () => fetchTasks();
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    window.addEventListener(TASKS_CHANGED_EVENT, scheduleRefetch);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(TASKS_CHANGED_EVENT, scheduleRefetch);
+      if (timer) clearTimeout(timer);
+    };
   }, [fetchTasks]);
 
   useEffect(() => {

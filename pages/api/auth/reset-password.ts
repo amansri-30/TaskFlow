@@ -7,6 +7,7 @@ import { passwordPolicyError } from "@/lib/passwordPolicy";
 import { handleRes } from "@/middleware/resHandler";
 import { catchAsyncError } from "@/middleware/catchAsyncError";
 import { rateLimit, clientKey } from "@/lib/rateLimit";
+import { saveCookie } from "@/lib/saveCookies";
 
 const resetPassword = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
@@ -62,6 +63,13 @@ const resetPassword = catchAsyncError(
     if (!updated) {
       return handleRes(res, 400, false, "Reset token is invalid or has expired");
     }
+
+    // The reset just bumped `passwordChangedAt`, which invalidates every token
+    // issued before it -- including the one in this browser's cookie. Leaving
+    // it there means middleware still sees a `token` and sends /login straight
+    // to /dashboard, whose fetch then 401s and bounces back, so the user's
+    // reward for a successful reset was a flicker through a broken dashboard.
+    saveCookie(res, null, false);
 
     handleRes(res, 200, true, "Password reset successfully. You can now log in.");
   }

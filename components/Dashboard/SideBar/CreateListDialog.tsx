@@ -71,7 +71,7 @@ export default function CreateListDialog({
         </div>
         <p className="text-xs text-muted-foreground">
           Custom lists are saved on this device and appear in the sidebar and
-          task forms. Delete a list by hovering it in the sidebar.
+          task forms. Remove one with the trash icon on its sidebar row.
         </p>
       </div>
       <DialogFooter>

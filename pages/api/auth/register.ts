@@ -28,16 +28,46 @@ const registerUser = catchAsyncError(
     // short password — only this check actually enforces the policy.
     const policyError = passwordPolicyError(password);
     if (policyError) return handleRes(res, 400, false, policyError);
+
+    // A JSON body can carry any type here, and `String(name).trim()` cheerfully
+    // stores "[object Object]" as a display name. Bound the type and the length
+    // at the boundary: the input has a cap in the UI, a direct POST does not,
+    // and 80 characters is what every other view in the app can render.
+    const displayName = typeof name === "string" ? name.trim() : "";
+    if (!displayName) return handleRes(res, 400, false, "Please enter your name");
+    if (displayName.length > 80)
+      return handleRes(res, 400, false, "Name cannot exceed 80 characters");
+
     // Store the email normalized (trim + lowercase) so lookup is case-insensitive
     // everywhere — otherwise a mixed-case signup could be locked out.
-    const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    // Deliberately permissive: it only rejects strings that could not be an
+    // address at all, instead of trying to out-guess the RFC.
+    if (
+      !normalizedEmail ||
+      normalizedEmail.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
+    ) {
+      return handleRes(res, 400, false, "Enter a valid email address");
+    }
 
     await connectDB();
     let user = await User.findOne({ email: normalizedEmail });
     if (user) return handleRes(res, 400, false, "Email already registered. Try logging in.");
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    user = await User.create({ name: String(name).trim(), email: normalizedEmail, password: hashedPassword });
+    try {
+      user = await User.create({ name: displayName, email: normalizedEmail, password: hashedPassword });
+    } catch (err) {
+      // Two signups for the same address can both clear the lookup above before
+      // either insert lands. The unique index is the real guard, and its error
+      // used to escape to catchAsyncError, which answers "That value is already
+      // in use." — a 409 that names no field, so the form could only shrug.
+      if ((err as { code?: number })?.code === 11000) {
+        return handleRes(res, 400, false, "Email already registered. Try logging in.");
+      }
+      throw err;
+    }
 
     const token = generateJWTToken(user._id);
     saveCookie(res, token, true);

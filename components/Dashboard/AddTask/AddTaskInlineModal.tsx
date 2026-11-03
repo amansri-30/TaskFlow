@@ -49,6 +49,7 @@ const FormSchema = z.object({
   description: z.string().optional().default(""),
   notes: z.string().optional().default(""),
   dueDate: z.date().optional(),
+  dueTime: z.string().optional().default(""),
   list: z.string().default(""),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   recurrence: z.enum(["none", "daily", "weekly", "monthly"]).default("none"),
@@ -81,6 +82,7 @@ export function AddTaskInlineModal({
       description: "",
       notes: "",
       dueDate: undefined,
+      dueTime: "",
       list: "default",
       priority: "medium",
       recurrence: "none",
@@ -98,9 +100,20 @@ export function AddTaskInlineModal({
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
     if (submitting) return;
+    // The calendar picks a DAY, but the due instant is what a lead-time reminder
+    // is anchored to. Without a time the task defaulted to local midnight, so
+    // "1 hour before" fired the night before. Combine the two fields here rather
+    // than at each call site.
+    const dueDate = data.dueDate ? new Date(data.dueDate) : null;
+    if (dueDate && data.dueTime) {
+      const [hours, minutes] = data.dueTime.split(":").map(Number);
+      if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+        dueDate.setHours(hours, minutes, 0, 0);
+      }
+    }
     const reminderAt = resolveReminderAt(
       data.reminder,
-      data.dueDate ? data.dueDate.toISOString() : null,
+      dueDate ? dueDate.toISOString() : null,
       data.remindAt || null
     );
     // A relative reminder with no due date resolves against "now", which would
@@ -117,7 +130,7 @@ export function AddTaskInlineModal({
       taskTitle: data.taskTitle,
       description: data.description,
       notes: data.notes || "",
-      dueDate: data.dueDate ?? null,
+      dueDate,
       list: data.list,
       priority: data.priority,
       recurrence: data.recurrence,
@@ -125,8 +138,8 @@ export function AddTaskInlineModal({
       // Anchor monthly recurrence to the user's local calendar day rather than
       // letting the server derive it from the UTC-serialized date.
       monthlyDay:
-        data.recurrence === "monthly" && data.dueDate
-          ? data.dueDate.getDate()
+        data.recurrence === "monthly" && dueDate
+          ? dueDate.getDate()
           : undefined,
       remindAt,
     };
@@ -246,7 +259,12 @@ export function AddTaskInlineModal({
                       )}
                     >
                       {field.value ? (
-                        format(field.value, "PPP")
+                        <span>
+                          {format(field.value, "PPP")}
+                          {form.watch("dueTime")
+                            ? ` at ${form.watch("dueTime")}`
+                            : ""}
+                        </span>
                       ) : (
                         <span>Pick a date</span>
                       )}
@@ -267,6 +285,26 @@ export function AddTaskInlineModal({
                   />
                 </PopoverContent>
               </Popover>
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="dueTime"
+          render={({ field }) => (
+            <FormItem className="flex flex-col">
+              <FormControl>
+                <Input
+                  type="time"
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  disabled={!form.watch("dueDate")}
+                  className="min-w-[120px]"
+                  aria-label="Due time (optional)"
+                  title="Due time (optional)"
+                />
+              </FormControl>
             </FormItem>
           )}
         />

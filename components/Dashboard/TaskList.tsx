@@ -61,6 +61,7 @@ import { tasksToCsv } from "@/lib/csv";
 import { tasksToIcs } from "@/lib/ics";
 import { notifyTasksChanged } from "@/lib/taskEvents";
 import { csvToTaskSeeds } from "@/lib/csvImport";
+import { icsToTaskSeeds } from "@/lib/icsImport";
 import { parseQuickAdd } from "@/lib/quickParse";
 import { SEARCH_FLAGS, matchesFlag } from "@/lib/search";
 import {
@@ -2266,16 +2267,31 @@ function deferAnchor(task: Task, dueIso: string | null) {
     setImporting(true);
     try {
       const text = await file.text();
-      // JSON is the backup format; CSV is the spreadsheet format and now round
-      // trips too, so exporting a view, editing it in Excel and bringing it
-      // back no longer requires a detour through a JSON editor. The extension
-      // decides when it is present; otherwise a leading `{`/`[` is the tell.
+      // JSON is the backup format, CSV the spreadsheet format, and calendar
+      // (.ics) the timeline format; all three now round trip. A calendar file
+      // is recognised by its header because downloads are frequently renamed,
+      // while the extension is still trusted so a truncated file gets a
+      // calendar-specific message instead of being read as CSV.
       const name = file.name.toLowerCase();
+      const source = text.replace(/^\uFEFF/, "").trimStart();
+      const isIcs =
+        name.endsWith(".ics") || /^BEGIN:VCALENDAR/i.test(source);
       const isCsv =
-        name.endsWith(".csv") ||
-        (!name.endsWith(".json") && !/^\s*[[{]/.test(text));
-      let items: any[] | null;
-      if (isCsv) {
+        !isIcs &&
+        (name.endsWith(".csv") ||
+          (!name.endsWith(".json") && !/^[[{]/.test(source)));
+      let items: any[] | null = null;
+      let parserSkipped = 0;
+      let emptyMessage = "The file contains no tasks";
+      if (isIcs) {
+        const parsedIcs = icsToTaskSeeds(text);
+        items = parsedIcs.seeds;
+        parserSkipped = parsedIcs.skipped;
+        emptyMessage =
+          parsedIcs.eventCount > 0
+            ? "No importable calendar events found"
+            : "The file contains no calendar events";
+      } else if (isCsv) {
         items = csvToTaskSeeds(text);
       } else {
         const parsed = JSON.parse(text) as any;
@@ -2290,7 +2306,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
         return;
       }
       if (items.length === 0) {
-        toast.error("The file contains no tasks");
+        toast.error(emptyMessage);
         return;
       }
       if (items.length > 2000) {
@@ -2318,7 +2334,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
           fail++;
         }
       }
-      const skipped = items.length - payloads.length;
+      const skipped = items.length - payloads.length + parserSkipped;
       if (ok > 0) {
         toast.success(`Imported ${ok} of ${payloads.length} tasks`);
       }
@@ -2328,7 +2344,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
       }
       refresh();
     } catch {
-      toast.error("Could not read the file. Make sure it is valid JSON or CSV.");
+      toast.error(
+        "Could not read the file. Make sure it is valid JSON, CSV, or iCalendar."
+      );
     } finally {
       setImporting(false);
     }
@@ -2576,9 +2594,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".json,.csv,application/json,text/csv"
+        accept=".json,.csv,.ics,application/json,text/csv,text/calendar"
         className="hidden"
-        aria-label="Import tasks from JSON or CSV"
+        aria-label="Import tasks from JSON, CSV, or iCalendar"
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) handleImportFile(file);
@@ -2590,7 +2608,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
         variant="outline"
         onClick={() => fileInputRef.current?.click()}
         disabled={importing}
-        title="Import tasks from a JSON backup or a CSV spreadsheet"
+        title="Import tasks from a JSON backup, a CSV spreadsheet, or a calendar (.ics) file"
       >
         <Upload className="mr-1.5 h-4 w-4" />
         {importing ? "Importing..." : "Import"}

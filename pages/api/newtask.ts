@@ -122,7 +122,7 @@ const newTask = catchAsyncError(
         ? list.trim().slice(0, 50)
         : "default";
 
-    await Task.create({
+    const created = await Task.create({
       title: normalizedTitle,
       description: description ? String(description).slice(0, 100) : "",
       notes: typeof notes === "string" ? notes.slice(0, 4000) : "",
@@ -149,7 +149,12 @@ const newTask = catchAsyncError(
       trashedAt: resolvedTrashedAt,
     });
 
-    handleRes(res, 200, true, "Task created successfully");
+    handleRes(res, 200, true, "Task created successfully", {
+      // Return the new id so a caller that creates rows in bulk (the importer)
+      // can offer to undo exactly what it added. Additive: every existing
+      // caller ignores the body and keeps working unchanged.
+      id: created._id.toString(),
+    });
   }
 );
 

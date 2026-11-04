@@ -134,8 +134,16 @@ const logIn = catchAsyncError(
     // Re-read without the secret fields, so the locked-out bookkeeping is never
     // serialized into the response.
     const user = await User.findOne({email: normalizedEmail});
+    // The password check above proves the account existed a moment ago, but
+    // another request can still remove it (or change its email) in between.
+    // Without this guard the response below dereferences null and the handler
+    // reports a 500 for what is, from the caller's point of view, a failed
+    // sign-in.
+    if (!user) {
+      return handleRes(res, 400, false, "Invalid email or password");
+    }
 
-    const token = generateJWTToken(user._id);
+    const token = generateJWTToken(user._id.toString());
     saveCookie(res, token, true);
     res.status(200).json({
       success: true,

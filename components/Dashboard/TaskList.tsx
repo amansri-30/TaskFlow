@@ -173,6 +173,11 @@ const GROUP_PREF_KEY = "taskflow:groupByDue";
  */
 type UndoEntry =
   | { kind: "delete"; label: string; at: number; ids: string[] }
+  // Rows created by the importer, removed permanently when undone. Distinct
+  // from `delete`, whose replay *restores* trashed rows: an import undo has to
+  // go the other way, otherwise it would try to restore tasks that were never
+  // trashed.
+  | { kind: "import"; label: string; at: number; ids: string[] }
   | {
       kind: "edit";
       label: string;
@@ -269,7 +274,7 @@ function loadUndoStack(): UndoEntry[] {
         // Validate the payload too: a truncated or hand-edited entry whose
         // kind/at look fine but that is missing `ids`/`prev` would otherwise
         // crash the pruning pass below on the very next fetch.
-        if (e.kind === "delete") {
+        if (e.kind === "delete" || e.kind === "import") {
           return (
             Array.isArray(e.ids) &&
             e.ids.every((id: unknown) => typeof id === "string")
@@ -822,14 +827,17 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       setUndoStack((prev) =>
         prev
           .map((entry) => {
-            if (entry.kind === "delete") {
+            if (entry.kind === "delete" || entry.kind === "import") {
               const ids = entry.ids.filter((id) => live.has(id));
               if (ids.length === entry.ids.length) return entry;
               return ids.length
                 ? {
                     ...entry,
                     ids,
-                    label: `Undo delete (${plural(ids.length, "task")})`,
+                    label:
+                      entry.kind === "import"
+                        ? `Undo import (${plural(ids.length, "task")})`
+                        : `Undo delete (${plural(ids.length, "task")})`,
                   }
                 : null;
             }
@@ -2013,14 +2021,17 @@ function deferAnchor(task: Task, dueIso: string | null) {
     setUndoStack((prev) =>
       prev
         .map((entry) => {
-          if (entry.kind === "delete") {
+          if (entry.kind === "delete" || entry.kind === "import") {
             const kept = entry.ids.filter((id) => !gone.has(id));
             if (kept.length === entry.ids.length) return entry;
             return kept.length
               ? {
                   ...entry,
                   ids: kept,
-                  label: `Undo delete (${plural(kept.length, "task")})`,
+                  label:
+                    entry.kind === "import"
+                      ? `Undo import (${plural(kept.length, "task")})`
+                      : `Undo delete (${plural(kept.length, "task")})`,
                 }
               : null;
           }
@@ -2085,17 +2096,28 @@ function deferAnchor(task: Task, dueIso: string | null) {
     };
     setUndoBusy(true);
     try {
-      const calls: { id: string; patch: Record<string, unknown> }[] =
-        entry.kind === "delete"
-          ? entry.ids.map((id) => ({ id, patch: { restore: true } }))
-          : entry.prev;
-      if (calls.length === 0) {
+      // An import undo is the inverse of a create, so it removes rows for good
+      // rather than restoring them. Everything else replays as a PATCH.
+      const total =
+        entry.kind === "import"
+          ? entry.ids.length
+          : entry.kind === "delete"
+          ? entry.ids.length
+          : entry.prev.length;
+      if (total === 0) {
         // Nothing to replay: drop this entry too so the stack can't wedge.
         setUndoStack(dropConsumed);
         return;
       }
       const results = await Promise.allSettled(
-        calls.map((c) => axios.patch(`/api/task/${c.id}`, c.patch))
+        entry.kind === "import"
+          ? entry.ids.map((id) =>
+              axios.delete(`/api/task/${id}?permanent=true`)
+            )
+          : (entry.kind === "delete"
+              ? entry.ids.map((id) => ({ id, patch: { restore: true } }))
+              : entry.prev
+            ).map((c) => axios.patch(`/api/task/${c.id}`, c.patch))
       );
       const ok = results.filter((r) => r.status === "fulfilled").length;
       // Consumed either way: the rows that succeeded are already reverted, so
@@ -2103,13 +2125,15 @@ function deferAnchor(task: Task, dueIso: string | null) {
       // time. A failure is reported rather than hidden, and the refetch below
       // shows the true state.
       setUndoStack(dropConsumed);
-      if (ok < calls.length) {
+      if (ok < total) {
         toast.error(
-          `Undone ${ok} of ${calls.length} — ${calls.length - ok} could not be restored`
+          `Undid ${ok} of ${total} — ${total - ok} could not be reverted`
         );
       } else {
         toast.success(
-          entry.kind === "delete"
+          entry.kind === "import"
+            ? `Removed ${plural(ok, "imported task")}`
+            : entry.kind === "delete"
             ? `Restored ${plural(ok, "task")}`
             : `Reverted ${plural(ok, "task")}`
         );
@@ -2326,10 +2350,17 @@ function deferAnchor(task: Task, dueIso: string | null) {
       }
       let ok = 0;
       let fail = 0;
+      const createdIds: string[] = [];
       for (const payload of payloads) {
         try {
-          await axios.post("/api/newtask", payload);
+          const response = await axios.post("/api/newtask", payload);
           ok++;
+          // The create endpoint returns the new id so an accidental import can
+          // be removed again through the same undo history as every batch
+          // action. Missing/non-string ids are tolerated: the count still
+          // reports the import, only the undo scope is smaller.
+          const createdId = response.data?.id;
+          if (typeof createdId === "string") createdIds.push(createdId);
         } catch {
           fail++;
         }
@@ -2337,6 +2368,16 @@ function deferAnchor(task: Task, dueIso: string | null) {
       const skipped = items.length - payloads.length + parserSkipped;
       if (ok > 0) {
         toast.success(`Imported ${ok} of ${payloads.length} tasks`);
+      }
+      if (createdIds.length > 0) {
+        // Importing the wrong file is the one bulk action with no per-row
+        // confirmation, so it must be reversible. Undoing removes exactly the
+        // rows this import created, even if hundreds were added.
+        pushUndo({
+          kind: "import",
+          label: `Undo import (${plural(createdIds.length, "task")})`,
+          ids: createdIds,
+        });
       }
       if (fail > 0) toast.error(`${fail} task${fail > 1 ? "s" : ""} failed`);
       if (skipped > 0) {
@@ -2544,6 +2585,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
       await axios.delete(`/api/task/${task.id}?permanent=true`);
       setTrashed((prev) => prev.filter((t) => t.id !== task.id));
       forgetUndoFor(task.id);
+      // A permanent delete also removes this chain's pending occurrence on the
+      // server (the successor a completed recurring task spawned). That row is
+      // still in the active list here, so refetch instead of leaving a phantom
+      // task the user can click but cannot delete.
+      await refreshSilently();
       toast.success("Task permanently deleted");
     } catch {
       toast.error("Could not delete task");
@@ -2573,6 +2619,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
       // The fulfilled rows are gone for good, so any undo entry that could
       // restore them is dead weight.
       forgetUndoFor(...succeeded.map((t) => t.id));
+      // Successful permanent deletes may also have removed pending recurrence
+      // successors from the active list.
+      await refreshSilently();
       toast.error(
         `Failed to permanently delete ${failed.length} task${failed.length > 1 ? "s" : ""}`
       );
@@ -2583,6 +2632,8 @@ function deferAnchor(task: Task, dueIso: string | null) {
     // than wiping the whole history, which used to throw away still-valid
     // edit entries for tasks that were never in the trash.
     forgetUndoFor(...trashed.map((t) => t.id));
+    // Pending occurrences of any deleted recurring parents are gone server-side.
+    await refreshSilently();
     toast.success("Trash emptied");
   };
 

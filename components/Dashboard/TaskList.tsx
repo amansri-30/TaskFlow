@@ -562,6 +562,48 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     }
   };
 
+  const handleBatchPin = async () => {
+    if (selectedTasks.length === 0) return;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
+    const target = selectedTasks;
+    const ids = new Set(target.map((t) => t.id));
+    // Group toggle with a predictable rule: unpin only when the whole
+    // selection is already pinned, otherwise pin everything. A mixed selection
+    // therefore fills in the missing pins instead of unpinning the rows that
+    // were already pinned -- the more common intent when pinning a batch.
+    const pinned = !target.every((t) => t.pinned);
+    setTasks((prev) =>
+      prev.map((t) => (ids.has(t.id) ? { ...t, pinned } : t))
+    );
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { pinned }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    const fulfilled = target.filter((_, i) => results[i].status === "fulfilled");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((t) => t.id));
+      rollbackFields(previous, failedIds, ["pinned"]);
+      toast.error(`Failed to ${pinned ? "pin" : "unpin"} ${failed.length} of ${target.length} tasks`);
+    } else {
+      toast.success(`${pinned ? "Pinned" : "Unpinned"} ${plural(target.length, "task")}`);
+    }
+    // Partial failures still persisted the successful rows, so each of those
+    // needs its own way back through the shared undo history.
+    if (fulfilled.length > 0) {
+      pushUndo({
+        kind: "edit",
+        label: `Undo ${pinned ? "pin" : "unpin"} (${plural(fulfilled.length, "task")})`,
+        prev: fulfilled.map((t) => ({
+          id: t.id,
+          // Restore this row's own previous value: a mixed selection turns
+          // some rows on and leaves others on, so a single shared value would
+          // flip the wrong half.
+          patch: { pinned: previous.get(t.id)?.pinned === true },
+        })),
+      });
+    }
+  };
+
   const handleBatchSetList = async (list: string) => {
     if (selectedTasks.length === 0) return;
     const previous = new Map(tasks.map((t) => [t.id, t]));
@@ -1658,7 +1700,26 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
         // spawned; drop it from the local list too so no phantom remains.
         const removed = new Set(removedNextTaskIds);
         setTasks((prev) => prev.filter((t) => !removed.has(t.id)));
+        // The removed occurrence can itself be selected (select a repeating
+        // chain together with its successor, then reopen the parent). Leaving
+        // the id in the batch selection made the toolbar count a task that no
+        // longer exists, so batch Delete previewed more rows than it would
+        // actually trash. The batch reopen path already prunes this way.
+        setSelectedIds((prev) =>
+          new Set(Array.from(prev).filter((id) => !removed.has(id)))
+        );
       }
+      // A single checkbox click is undoable for the same reason the batch
+      // Complete/Reopen buttons are: a mis-click on a repeating task both
+      // closes it and spawns (or deletes) a future occurrence, which is not
+      // something the user can put back with a second click on the same row.
+      // Replaying `completed: !value` is enough -- the server derives the
+      // completedAt stamp and compensates the recurrence chain itself.
+      pushUndo({
+        kind: "edit",
+        label: value ? "Undo complete (1 task)" : "Undo reopen (1 task)",
+        prev: [{ id: task.id, patch: { completed: !value } }],
+      });
     } catch {
       // Roll back only the fields this handler owns (completed/completedAt) —
       // a whole-task snapshot would clobber a concurrent update (e.g. a pin
@@ -3065,6 +3126,15 @@ function deferAnchor(task: Task, dueIso: string | null) {
                   >
                     <Copy className="mr-1.5 h-4 w-4" />
                     Duplicate
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleBatchPin}
+                    disabled={selectedTasks.length === 0}
+                  >
+                    <Pin className="mr-1.5 h-4 w-4" />
+                    {selectedTasks.every((t) => t.pinned) ? "Unpin" : "Pin"}
                   </Button>
                   <div className="flex items-center gap-1.5">
                     <Flag className="h-4 w-4 text-muted-foreground" />

@@ -226,7 +226,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
     }
 
     case "PATCH": {
-      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt, monthlyDay } = req.body || {};
+      const { completed, restore, pinned, priority, list, tags, snooze, reminderFired, deferTo, scannedRemindAt, monthlyDay, remindAt } = req.body || {};
 
       if (restore === true) {
         task.trashed = false;
@@ -238,8 +238,9 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
 
       if (reminderFired === true) {
         // Acknowledges a fired reminder so it can't notify again on every
-        // poll. Clearing the reminder itself is a PUT, not a PATCH, so the
-        // scheduled time survives until the user edits it.
+        // poll. This leaves the reminder itself in place so the scheduled time
+        // survives until the user edits or clears it (a PUT/PATCH of
+        // `remindAt`, which clears this stamp).
         //
         // Compare-and-set on the reminder time: the client sends the remindAt
         // it actually scanned, and the stamp is skipped if the reminder moved
@@ -424,6 +425,31 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task tags updated", {
+          task: mapTask(task),
+        });
+      }
+
+      // Field-scoped reminder write, the PATCH sibling of the PUT arm. Bulk
+      // reminder actions and their undo entries need to touch one field without
+      // restating a whole task, exactly like priority/list/tags above. The
+      // validation is deliberately identical to PUT: a malformed or elapsed
+      // reminder must not be stored, because the 30s client scan would fire it
+      // instantly for a task the user has never seen.
+      if (remindAt !== undefined) {
+        const reminder = remindAt ? new Date(remindAt) : null;
+        if (reminder && isNaN(reminder.getTime())) {
+          return handleRes(res, 400, false, "Invalid reminder date");
+        }
+        if (reminder && reminder.getTime() <= Date.now()) {
+          return handleRes(res, 400, false, "Reminder must be in the future");
+        }
+        task.remindAt = reminder;
+        // Any reminder write re-arms it, so a stale acknowledgement cannot mute
+        // the new time. Clearing sets both fields to null.
+        task.remindedAt = null;
+        task.updatedAt = new Date();
+        await task.save();
+        return handleRes(res, 200, true, "Task reminder updated", {
           task: mapTask(task),
         });
       }

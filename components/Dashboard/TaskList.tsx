@@ -146,6 +146,23 @@ const reminderFields = (t: Task) => ({
 });
 
 /**
+ * Make a replayed reminder patch safe to send.
+ *
+ * Undo entries record the reminder that existed *before* a bulk action, but
+ * replay can happen minutes later. The server refuses to arm an instant that
+ * has already passed (the 30s scan would fire it immediately), so a stale
+ * recorded reminder is replayed as "cleared" instead of failing the whole
+ * request. Every other field passes through untouched.
+ */
+const futureSafeReminderPatch = (patch: Record<string, unknown>) => {
+  const raw = patch.remindAt;
+  if (typeof raw !== "string") return patch;
+  const when = new Date(raw);
+  if (!isNaN(when.getTime()) && when.getTime() > Date.now()) return patch;
+  return { ...patch, remindAt: null };
+};
+
+/**
  * Compact one-line label for the quick-capture preview, e.g.
  * "Sat, Nov 1 · 9:00 AM". It shows the exact instant that will be stored
  * rather than the words that were typed, so `at 6pm` and the default 9:00
@@ -183,6 +200,14 @@ type UndoEntry =
       label: string;
       at: number;
       prev: { id: string; patch: Record<string, unknown> }[];
+      /**
+       * How the replay is sent. Almost every field the batch toolbar writes is
+       * accepted by PATCH, but `recurrence` is a PUT-only field (the server's
+       * PATCH arm has no branch for it, so replaying one as a PATCH answered
+       * "Invalid completion status" and every such undo failed). Persisted
+       * entries from older versions omit this and default to PATCH.
+       */
+      verb?: "patch" | "put";
     };
 
 /** How many batch actions stay recoverable. */
@@ -290,7 +315,8 @@ function loadUndoStack(): UndoEntry[] {
                 typeof p.id === "string" &&
                 p.patch &&
                 typeof p.patch === "object"
-            )
+            ) &&
+            (e.verb === undefined || e.verb === "patch" || e.verb === "put")
           );
         }
         return false;
@@ -335,6 +361,10 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // never reappears on the next open.
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
+  // Bulk reminder picker holds its custom instant locally so the datetime input
+  // survives re-renders and a half-picked value never applies on its own.
+  const [reminderPickerOpen, setReminderPickerOpen] = useState(false);
+  const [batchReminderDraft, setBatchReminderDraft] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const pendingRef = useRef<Set<string>>(new Set());
   const [pendingOps, setPendingOps] = useState<Set<string>>(new Set());
@@ -647,7 +677,16 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     const ids = new Set(target.map((t) => t.id));
     setTasks((prev) =>
       prev.map((t) =>
-        ids.has(t.id) ? { ...t, recurrence } : t
+        ids.has(t.id)
+          ? {
+              ...t,
+              recurrence,
+              // The server strips `repeatUntil` when recurrence becomes none;
+              // mirror that locally so re-opening the edit dialog cannot
+              // resurrect a stale end date on a task that no longer repeats.
+              repeatUntil: recurrence === "none" ? null : t.repeatUntil,
+            }
+          : t
       )
     );
     // Recurrence is not a PATCH field, so each row goes out as a PUT. The
@@ -669,7 +708,11 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     const fulfilled = target.filter((_, i) => results[i].status === "fulfilled");
     if (failed.length > 0) {
       const failedIds = new Set(failed.map((t) => t.id));
-      rollbackFields(previous, failedIds, ["recurrence", "monthlyDay"]);
+      rollbackFields(previous, failedIds, [
+        "recurrence",
+        "monthlyDay",
+        "repeatUntil",
+      ]);
       toast.error(
         `Failed to set repeat for ${failed.length} of ${target.length} tasks`
       );
@@ -682,11 +725,17 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       pushUndo({
         kind: "edit",
         label: `Undo repeat change (${plural(fulfilled.length, "task")})`,
+        // Recurrence lives on the PUT contract; PATCH has no branch for it, so
+        // replaying this entry as a PATCH was rejected and the undo failed every
+        // time. `repeatUntil` travels with it because switching a series to
+        // "none" clears the end date server-side.
+        verb: "put",
         prev: fulfilled.map((t) => ({
           id: t.id,
           patch: {
             recurrence: previous.get(t.id)?.recurrence ?? "none",
             monthlyDay: previous.get(t.id)?.monthlyDay ?? null,
+            repeatUntil: previous.get(t.id)?.repeatUntil ?? null,
           },
         })),
       });
@@ -1993,6 +2042,105 @@ function deferAnchor(task: Task, dueIso: string | null) {
     }
   };
 
+  /**
+   * Bulk reminder write.
+   *
+   * Presets that are relative to a due date ("1 hour before") resolve against
+   * each row's own date, while absolute choices ("Tomorrow morning", a picked
+   * instant) give every selected task the same moment. Rows that cannot take
+   * the chosen reminder — no due date, or a target already in the past — are
+   * counted and reported instead of failing the whole batch.
+   */
+  const handleBatchSetReminder = async (
+    preset: ReminderPresetId | "clear",
+    customIso?: string | null
+  ) => {
+    if (selectedTasks.length === 0) return;
+    const previous = new Map(tasks.map((t) => [t.id, t]));
+    const target = selectedTasks;
+    const plan: { task: Task; remindAt: string | null }[] = [];
+    let skipped = 0;
+    const custom =
+      preset === "custom" && customIso ? new Date(customIso) : null;
+    if (preset === "custom") {
+      if (!custom || isNaN(custom.getTime())) return;
+      if (custom.getTime() <= Date.now()) {
+        toast.error("That reminder time is already in the past");
+        return;
+      }
+    }
+    for (const task of target) {
+      if (preset === "clear") {
+        plan.push({ task, remindAt: null });
+        continue;
+      }
+      const when =
+        preset === "custom"
+          ? custom
+          : resolveReminderAt(preset, task.scheduledAt);
+      if (!when || isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+        skipped++;
+        continue;
+      }
+      plan.push({ task, remindAt: when.toISOString() });
+    }
+    if (plan.length === 0) {
+      toast.error(
+        preset === "clear"
+          ? "Nothing to clear"
+          : "No selected task can take that reminder — check its due date"
+      );
+      return;
+    }
+    const byId = new Map(plan.map((p) => [p.task.id, p.remindAt]));
+    setTasks((prev) =>
+      prev.map((t) =>
+        byId.has(t.id)
+          ? { ...t, remindAt: byId.get(t.id)!, remindedAt: null }
+          : t
+      )
+    );
+    const results = await Promise.allSettled(
+      plan.map((p) =>
+        axios.patch(`/api/task/${p.task.id}`, { remindAt: p.remindAt })
+      )
+    );
+    const failed = plan.filter((_, i) => results[i].status === "rejected");
+    const succeeded = plan.filter((_, i) => results[i].status === "fulfilled");
+    if (failed.length > 0) {
+      const failedIds = new Set(failed.map((p) => p.task.id));
+      rollbackFields(previous, failedIds, ["remindAt", "remindedAt"]);
+      toast.error(
+        `Failed to set reminders for ${failed.length} of ${plan.length} tasks`
+      );
+    }
+    if (succeeded.length > 0) {
+      pushUndo({
+        kind: "edit",
+        label:
+          preset === "clear"
+            ? `Undo clear reminders (${plural(succeeded.length, "task")})`
+            : `Undo reminder (${plural(succeeded.length, "task")})`,
+        prev: succeeded.map((p) => ({
+          id: p.task.id,
+          // Per-row previous value: a mixed selection may have had different
+          // reminders. Replay rewrites a now-past instant to "cleared".
+          patch: { remindAt: previous.get(p.task.id)?.remindAt ?? null },
+        })),
+      });
+      toast.success(
+        preset === "clear"
+          ? `Cleared reminders on ${plural(succeeded.length, "task")}`
+          : `Reminder set on ${plural(succeeded.length, "task")}`
+      );
+    }
+    if (skipped > 0) {
+      toast.error(
+        `${plural(skipped, "task")} skipped — no future due date to remind from`
+      );
+    }
+  };
+
   const handleSubtasks = async (task: Task, subtasks: Subtask[]) => {
     const previousTask = tasks.find((t) => t.id === task.id) ?? task;
     if (!beginOp(task.id)) return;
@@ -2178,7 +2326,17 @@ function deferAnchor(task: Task, dueIso: string | null) {
           : (entry.kind === "delete"
               ? entry.ids.map((id) => ({ id, patch: { restore: true } }))
               : entry.prev
-            ).map((c) => axios.patch(`/api/task/${c.id}`, c.patch))
+            ).map((c) => {
+              // A recorded past reminder cannot be re-armed; treat it as cleared
+              // rather than letting the server reject the whole row.
+              const patch =
+                entry.kind === "edit"
+                  ? futureSafeReminderPatch(c.patch)
+                  : c.patch;
+              return entry.kind === "edit" && entry.verb === "put"
+                ? axios.put(`/api/task/${c.id}`, patch)
+                : axios.patch(`/api/task/${c.id}`, patch);
+            })
       );
       const ok = results.filter((r) => r.status === "fulfilled").length;
       // Consumed either way: the rows that succeeded are already reverted, so
@@ -2193,7 +2351,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
       } else {
         toast.success(
           entry.kind === "import"
-            ? `Removed ${plural(ok, "imported task")}`
+            ? `Removed ${plural(ok, "task")}`
             : entry.kind === "delete"
             ? `Restored ${plural(ok, "task")}`
             : `Reverted ${plural(ok, "task")}`
@@ -2269,7 +2427,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
     }
     const list =
       typeof item.list === "string" && item.list.trim()
-        ? item.list.trim()
+        ? // Lists are stored lowercase everywhere else (the CSV importer, the
+          // quick-add parser and custom lists all normalize that way), so a
+          // hand-written backup carrying "Work" must not create a second list
+          // that only differs by case.
+          item.list.trim().toLowerCase()
         : "default";
     const description =
       typeof item.description === "string" && item.description.trim()
@@ -2603,18 +2765,33 @@ function deferAnchor(task: Task, dueIso: string | null) {
 
   const handleBatchDuplicate = async () => {
     if (selectedTasks.length === 0) return;
+    const createdIds: string[] = [];
     let ok = 0;
     let fail = 0;
     for (const task of selectedTasks) {
       try {
-        await axios.post("/api/newtask", duplicatePayload(task));
+        const response = await axios.post("/api/newtask", duplicatePayload(task));
         ok++;
+        const createdId = response.data?.id;
+        if (typeof createdId === "string") createdIds.push(createdId);
       } catch {
         fail++;
       }
     }
     if (ok > 0) {
       toast.success(`Duplicated ${ok} task${ok > 1 ? "s" : ""}`);
+      // A batch duplicate creates rows with no obvious way back: the copies are
+      // new ids, so the delete undo entries for the originals cannot touch them.
+      // Record the created ids as an import-style undo (permanent delete), the
+      // same inverse a bulk import uses. Rows that returned no id still count as
+      // duplicated, only the undo scope is smaller.
+      if (createdIds.length > 0) {
+        pushUndo({
+          kind: "import",
+          label: `Undo duplicate (${plural(createdIds.length, "task")})`,
+          ids: createdIds,
+        });
+      }
       await refreshSilently();
     }
     if (fail > 0) {
@@ -3302,6 +3479,99 @@ function deferAnchor(task: Task, dueIso: string | null) {
                             No tags yet. Type one above.
                           </p>
                         )}
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Bell className="h-4 w-4 text-muted-foreground" />
+                    <Popover
+                      open={reminderPickerOpen}
+                      onOpenChange={(o) => {
+                        setReminderPickerOpen(o);
+                        if (!o) setBatchReminderDraft("");
+                      }}
+                    >
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 min-w-[110px]"
+                          disabled={selectedTasks.length === 0}
+                          aria-label="Set a reminder for selected tasks"
+                        >
+                          Remind
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-64 p-2">
+                        <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+                          Before each task&apos;s due date
+                        </p>
+                        <div className="grid gap-0.5">
+                          {REMINDER_PRESETS.filter(
+                            (p) =>
+                              p.id !== "none" &&
+                              p.id !== "custom" &&
+                              p.id !== "tomorrow"
+                          ).map((p) => (
+                            <Button
+                              key={p.id}
+                              variant="ghost"
+                              size="sm"
+                              className="justify-start font-normal"
+                              onClick={() => {
+                                handleBatchSetReminder(p.id);
+                                setReminderPickerOpen(false);
+                              }}
+                            >
+                              {p.label}
+                            </Button>
+                          ))}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="mt-1 w-full justify-start font-normal"
+                          onClick={() => {
+                            handleBatchSetReminder("tomorrow");
+                            setReminderPickerOpen(false);
+                          }}
+                        >
+                          Tomorrow morning (9:00)
+                        </Button>
+                        <div className="mt-1 border-t pt-1.5">
+                          <Input
+                            type="datetime-local"
+                            className="h-8"
+                            aria-label="Custom reminder time for selected tasks"
+                            value={batchReminderDraft}
+                            onChange={(e) =>
+                              setBatchReminderDraft(e.target.value)
+                            }
+                          />
+                          <Button
+                            size="sm"
+                            className="mt-1.5 h-8 w-full"
+                            disabled={!batchReminderDraft}
+                            onClick={() => {
+                              handleBatchSetReminder("custom", batchReminderDraft);
+                              setBatchReminderDraft("");
+                              setReminderPickerOpen(false);
+                            }}
+                          >
+                            Set for all selected
+                          </Button>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="mt-1 h-8 w-full justify-start font-normal text-red-600 hover:text-red-600"
+                          onClick={() => {
+                            handleBatchSetReminder("clear");
+                            setReminderPickerOpen(false);
+                          }}
+                        >
+                          Clear reminders
+                        </Button>
                       </PopoverContent>
                     </Popover>
                   </div>

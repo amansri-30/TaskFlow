@@ -1601,15 +1601,28 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
   // would miss the rows removed by `removedNextTaskIds` during a batch reopen.
   const dueGroups: DueGroup[] = groupTasksByDue(sortedIncomplete, now);
 
-  // Every export takes the rows on screen, so the file always matches the list
-  // the control sat next to - in the Trash view that is the trashed rows, not
-  // the active list. The active filter is part of the filename, so exports
-  // taken from different views do not overwrite each other in Downloads.
-  const exportRows = () => (trashView ? trashedFiltered : filtered);
+  // A selection narrows every export to exactly the checked rows, even when
+  // those rows span several views. Without a selection the file still matches
+  // the list the control sat next to - in the Trash view that is the trashed
+  // rows, not the active list. Selection does not leak into Trash: its rows
+  // are not selectable, and exporting active tasks from a bin view would be
+  // surprising. The scope is part of the filename, so exports taken from
+  // different views or selections do not overwrite each other in Downloads.
+  const exportSelection = !trashView ? selectedTasks : [];
+  const exportRows = () =>
+    exportSelection.length > 0
+      ? exportSelection
+      : trashView
+        ? trashedFiltered
+        : filtered;
   const exportFileName = (extension: string) => {
-    const view = trashView
-      ? "trash"
-      : filter.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "all";
+    const view =
+      exportSelection.length > 0
+        ? "selected"
+        : trashView
+          ? "trash"
+          : filter.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") ||
+            "all";
     return `taskflow-${view}-${new Date().toISOString().slice(0, 10)}.${extension}`;
   };
   const downloadFile = (contents: BlobPart, type: string, name: string) => {
@@ -2915,7 +2928,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>Export this view</DropdownMenuLabel>
+          <DropdownMenuLabel>
+            {exportSelection.length > 0
+              ? `Export ${plural(exportSelection.length, "selected task")}`
+              : "Export this view"}
+          </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={handleExportCsv}>
             <span className="flex flex-col">

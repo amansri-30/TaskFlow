@@ -512,25 +512,71 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
           // past `repeatUntil`, this completion is the last one and no
           // successor is spawned.
           const until = task.repeatUntil instanceof Date ? task.repeatUntil : null;
-          const pastRepeatUntil = !!until && !!nextDue && nextDue.getTime() > until.getTime();
-          if (nextDue && !pastRepeatUntil) {
+          if (nextDue && (!until || nextDue.getTime() <= until.getTime())) {
             // Drop sub-second precision so two requests completing the same task
             // within one second derive an identical nextDue and collide on the
             // partial unique index below, instead of each spawning an occurrence
             // that differs only in milliseconds. A todo due date has no use for
             // millisecond accuracy, and the dedupe lookup is exact-match.
             nextDue.setMilliseconds(0);
-            // Guard against a duplicate occurrence for the SAME chain only.
-            // Dedupe on baseTaskId (the chain this task belongs to), never on
-            // title+list: two independent tasks that merely share a title
-            // would otherwise kill each other's recurrence — and the orphan
-            // cleanup above would then delete the other chain's occurrence.
-            const existing = await Task.findOne({
+            // A date can already be occupied by a completed or trashed
+            // occurrence. Those rows are history, but they still collide with
+            // the partial unique index, and the old exact-date check treated
+            // them as a live successor — so completing a recurring task after
+            // reopening it, or after trashing its only pending occurrence,
+            // silently ended the chain. Read the chain's dates once and split
+            // them: an unfinished non-trashed row is the dedupe hit we want,
+            // while history is skipped until we reach a date with no row.
+            const futureOccurrences = await Task.find({
               user: task.user,
               baseTaskId: task._id,
-              scheduledAt: nextDue,
-            });
-            if (!existing) {
+              scheduledAt: { $gte: nextDue },
+            })
+              .select("scheduledAt completed trashed")
+              .lean();
+            const historyDates = new Set<number>();
+            const liveDates = new Set<number>();
+            for (const occurrence of futureOccurrences as any[]) {
+              const at =
+                occurrence.scheduledAt instanceof Date
+                  ? occurrence.scheduledAt
+                  : null;
+              if (!at || isNaN(at.getTime())) continue;
+              at.setMilliseconds(0);
+              const key = at.getTime();
+              if (occurrence.completed || occurrence.trashed) {
+                historyDates.add(key);
+              } else {
+                liveDates.add(key);
+              }
+            }
+            // Step forward one cadence at a time. The loop is bounded by the
+            // number of historical rows returned above, and the guard on
+            // `advanced` prevents a malformed recurrence from spinning.
+            let candidate: Date | null = nextDue;
+            while (
+              candidate &&
+              (!until || candidate.getTime() <= until.getTime()) &&
+              historyDates.has(candidate.getTime()) &&
+              !liveDates.has(candidate.getTime())
+            ) {
+              const advanced = nextOccurrenceDate(
+                candidate,
+                task.recurrence,
+                task.monthlyDay
+              );
+              if (!advanced || advanced.getTime() <= candidate.getTime()) {
+                candidate = null;
+                break;
+              }
+              advanced.setMilliseconds(0);
+              candidate = advanced;
+            }
+            if (
+              candidate &&
+              (!until || candidate.getTime() <= until.getTime()) &&
+              !liveDates.has(candidate.getTime())
+            ) {
               // Carry the reminder onto the next occurrence, but only when the
               // gap between reminder and due date still holds — a reminder
               // that would land in the past is dropped rather than firing
@@ -544,7 +590,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                 : 0;
               let nextRemindAt: Date | null = null;
               if (reminder && leadMs >= 0) {
-                const shifted = new Date(nextDue.getTime() - leadMs);
+                const shifted = new Date(candidate.getTime() - leadMs);
                 nextRemindAt = shifted.getTime() > Date.now() ? shifted : null;
               }
               try {
@@ -556,7 +602,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                   priority: task.priority,
                   user: task.user,
                   recurrence: task.recurrence,
-                  scheduledAt: nextDue,
+                  scheduledAt: candidate,
                   remindAt: nextRemindAt,
                   remindedAt: null,
                   monthlyDay: task.monthlyDay,
@@ -577,7 +623,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                   baseTaskId: task._id,
                 });
               } catch (spawnError: any) {
-                // The findOne above is a check, not a lock, so a concurrent
+                // The query above is a check, not a lock, so a concurrent
                 // completion can win the race and insert the same occurrence
                 // first. The partial unique index on (baseTaskId, scheduledAt)
                 // turns that into a duplicate-key error instead of a silently
@@ -588,7 +634,7 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
                 nextTask = await Task.findOne({
                   user: task.user,
                   baseTaskId: task._id,
-                  scheduledAt: nextDue,
+                  scheduledAt: candidate,
                 });
               }
             }

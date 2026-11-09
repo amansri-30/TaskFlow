@@ -2045,10 +2045,20 @@ function deferAnchor(task: Task, dueIso: string | null) {
         kind: "edit",
         label: `Undo reschedule (${plural(undoable.length, "task")})`,
         prev: undoable.map((t) => {
-          const was = previous.get(t.id)?.scheduledAt ?? null;
+          const before = previous.get(t.id);
+          const was = before?.scheduledAt ?? null;
           return {
             id: t.id,
-            patch: { deferTo: was, ...deferAnchor(t, was) },
+            patch: {
+              deferTo: was,
+              ...deferAnchor(t, was),
+              // The forward move can drop a reminder that would have landed in
+              // the past. Replaying the old date alone re-derives the reminder
+              // from the post-move value, so a dropped reminder stayed gone;
+              // sending the recorded instant lets the server restore it (or
+              // clear it once that instant is itself stale).
+              ...(before?.remindAt ? { remindAt: before.remindAt } : {}),
+            },
           };
         }),
       });
@@ -2204,24 +2214,51 @@ function deferAnchor(task: Task, dueIso: string | null) {
     }
   }, []);
 
-  const handleDelete = async (task: Task) => {
+  const handleDelete = async (task: Task, series = false) => {
     const previous = new Map(tasks.map((t) => [t.id, t]));
     setTasks((prev) => prev.filter((t) => t.id !== task.id));
     try {
-      // Soft delete — the task is recoverable from Trash.
-      await axios.delete(`/api/task/${task.id}`);
+      // Soft delete — the task is recoverable from Trash. `series` also takes
+      // the chain's upcoming occurrences, which may be rendered as their own
+      // rows elsewhere in the list.
+      const response = await axios.delete(
+        `/api/task/${task.id}${series ? "?series=true" : ""}`
+      );
+      const returned = (response.data?.trashedTasks as Task[] | undefined) || [];
+      const trashedTasks =
+        returned.length > 0
+          ? returned
+          : [
+              {
+                ...task,
+                trashed: true,
+                trashedAt: new Date().toISOString(),
+              },
+            ];
+      const trashedIds = new Set(trashedTasks.map((t) => t.id));
+      // A series delete can move rows the user did not click, so remove every
+      // id the server actually trashed instead of only the selected one.
+      setTasks((prev) => prev.filter((t) => !trashedIds.has(t.id)));
       setTrashed((prev) => [
-        { ...task, trashed: true, trashedAt: new Date().toISOString() },
+        ...trashedTasks.filter((t) => !prev.some((x) => x.id === t.id)),
         ...prev,
       ]);
       pushUndo({
         kind: "delete",
-        label: "Undo delete (1 task)",
-        ids: [task.id],
+        label: `Undo delete (${plural(trashedTasks.length, "task")})`,
+        ids: trashedTasks.map((t) => t.id),
       });
-      // Keep the batch counter honest: prune the id we just deleted.
-      setSelectedIds((prev) => new Set(Array.from(prev).filter((id) => id !== task.id)));
-      toast.success("Task moved to trash");
+      // Keep the batch counter honest: prune every id this delete took.
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        trashedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      toast.success(
+        trashedTasks.length > 1
+          ? `Moved ${plural(trashedTasks.length, "task")} to trash`
+          : "Task moved to trash"
+      );
     } catch {
       setTasks((prev) =>
         prev.some((t) => t.id === task.id)
@@ -4150,7 +4187,7 @@ function TaskItem({
   onToggle: (task: Task, value: boolean) => void;
   onTogglePin: (task: Task) => void;
   onSnooze: (task: Task) => void;
-  onDelete: (task: Task) => void;
+  onDelete: (task: Task, series?: boolean) => void;
   onDuplicate: (task: Task) => void;
   onSubtasks: (task: Task, subtasks: Subtask[]) => void;
   onRefresh: () => void;
@@ -4167,6 +4204,7 @@ function TaskItem({
   const [reminderOpen, setReminderOpen] = useState(false);
   const [deferPickerOpen, setDeferPickerOpen] = useState(false);
   const [newSubtask, setNewSubtask] = useState("");
+  const isRecurring = !!task.recurrence && task.recurrence !== "none";
 
   const reminderDue = isReminderDue(task.remindAt, task.remindedAt);
   // The ring stays on once a reminder has fired until it is dismissed —
@@ -4562,12 +4600,23 @@ function TaskItem({
               <Trash2 className="h-4 w-4" />
             </button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-[400px]">
+          <DialogContent className="sm:max-w-[420px]">
             <DialogHeader>
               <DialogTitle>Delete task?</DialogTitle>
               <DialogDescription>
-                Are you sure you want to delete &ldquo;{task.title}&rdquo;? It
-                will be moved to Trash and can be restored later.
+                {isRecurring ? (
+                  <>
+                    &ldquo;{task.title}&rdquo; is part of a repeating series.
+                    Move just this task to Trash, or stop the series and move
+                    its upcoming occurrences too? Everything can be restored
+                    later.
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to delete &ldquo;{task.title}&rdquo;?
+                    It will be moved to Trash and can be restored later.
+                  </>
+                )}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="flex gap-2 sm:justify-end">
@@ -4577,15 +4626,38 @@ function TaskItem({
               >
                 Cancel
               </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  setConfirmDelete(false);
-                  onDelete(task);
-                }}
-              >
-                Delete
-              </Button>
+              {isRecurring ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      onDelete(task, false);
+                    }}
+                  >
+                    This task
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      onDelete(task, true);
+                    }}
+                  >
+                    Delete series
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="destructive"
+                  onClick={() => {
+                    setConfirmDelete(false);
+                    onDelete(task);
+                  }}
+                >
+                  Delete
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>

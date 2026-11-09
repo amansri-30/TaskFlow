@@ -40,6 +40,46 @@ const mapTask = (t: any) => ({
   updatedAt: t.updatedAt,
 });
 
+/**
+ * Every unfinished, non-trashed occurrence below a task in its recurrence
+ * chain.
+ *
+ * `baseTaskId` points at the *immediate* parent, not the chain root, and a
+ * chain can hold completed rows in the middle: complete A (spawns B), reopen A
+ * (B is already completed so it survives the reopen cleanup), complete A again
+ * (spawns C under A). Deleting A used to look exactly one level down and see
+ * only B -- completed, so nothing was deleted -- and left C alive as a phantom
+ * future task. Walking parent links through history is the only way to reach
+ * the pending tail.
+ *
+ * `$graphLookup` does that traversal in one round trip and bounds the recursion,
+ * instead of issuing one query per generation (which a months-old daily chain
+ * would turn into hundreds of round trips). Trashed rows are followed through
+ * but not returned: they are already out of the user's working list, and a
+ * permanent delete must not silently destroy rows sitting in Trash.
+ */
+const pendingDescendantIds = async (task: any): Promise<any[]> => {
+  const [result] = await Task.aggregate([
+    { $match: { _id: task._id } },
+    {
+      $graphLookup: {
+        from: Task.collection.name,
+        startWith: "$_id",
+        connectFromField: "_id",
+        connectToField: "baseTaskId",
+        as: "descendants",
+        maxDepth: 500,
+        restrictSearchWithMatch: { user: task.user },
+      },
+    },
+    { $project: { descendants: { _id: 1, completed: 1, trashed: 1 } } },
+  ]);
+  const rows = ((result && result.descendants) || []) as any[];
+  return rows
+    .filter((row) => !row.completed && !row.trashed)
+    .map((row) => row._id);
+};
+
 const setMonthlyDay = (task: any, dateValue: unknown, clientDay?: unknown) => {
   if (task.recurrence !== "monthly") {
     task.monthlyDay = null;
@@ -371,6 +411,24 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
             movedTasks.push(mapTask(child));
           }
         }
+        // Undo of a reschedule replays the reminder that existed before the
+        // move. Deriving it from the current lead cannot restore one the
+        // forward move dropped for landing in the past, so an explicitly
+        // supplied `remindAt` wins over the derived value. A recorded instant
+        // that is already past by replay time is dropped, matching the rule
+        // `moveDueDate` uses, instead of firing on the next poll.
+        if (remindAt !== undefined) {
+          if (remindAt) {
+            const explicit = new Date(remindAt);
+            if (isNaN(explicit.getTime())) {
+              return handleRes(res, 400, false, "Invalid reminder date");
+            }
+            task.remindAt = explicit.getTime() > Date.now() ? explicit : null;
+          } else {
+            task.remindAt = null;
+          }
+          task.remindedAt = null;
+        }
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task rescheduled", {
@@ -652,27 +710,50 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
 
     case "DELETE": {
       const permanent = req.query.permanent === "true";
+      const series = req.query.series === "true";
+      // Resolved before the branch: a permanent delete always takes the pending
+      // tail, while a soft delete takes it only when the caller asked for the
+      // whole series. A plain single-row trash skips the traversal entirely.
+      const pendingIds =
+        permanent || series ? await pendingDescendantIds(task) : [];
+
       if (permanent) {
-        // Take the chain's pending occurrence with it. Completing a recurring
-        // task spawns a successor tagged with this task's id; hard-deleting the
-        // parent left that successor behind as a phantom future task with a
-        // dangling reference — the user deletes their recurring task and a copy
-        // keeps appearing on the due date. Completed occurrences are history
-        // and stay.
-        await Task.deleteMany({
-          user: task.user,
-          baseTaskId: task._id,
-          completed: false,
-        });
+        // Completing a recurring task spawns a successor tagged with this
+        // task's id; hard-deleting the parent left that successor behind as a
+        // phantom future task with a dangling reference — the user deletes
+        // their recurring task and a copy keeps appearing on the due date.
+        if (pendingIds.length > 0) {
+          await Task.deleteMany({ _id: { $in: pendingIds } });
+        }
         await task.deleteOne();
         return handleRes(res, 200, true, "Task permanently deleted");
       }
       // Default: move to trash (recoverable) instead of hard-deleting.
+      const now = new Date();
       task.trashed = true;
-      task.trashedAt = new Date();
-      task.updatedAt = new Date();
+      task.trashedAt = now;
+      task.updatedAt = now;
       await task.save();
-      return handleRes(res, 200, true, "Task moved to trash");
+      const trashedTasks = [mapTask(task)];
+      if (series && pendingIds.length > 0) {
+        // Trash the chain's upcoming occurrences too, so deleting a completed
+        // occurrence no longer leaves the next one scheduled as if the series
+        // were still running. The client uses this list to populate Trash and
+        // to record one multi-row undo.
+        await Task.updateMany(
+          { _id: { $in: pendingIds } },
+          { $set: { trashed: true, trashedAt: now, updatedAt: now } }
+        );
+        const moved = await Task.find({ _id: { $in: pendingIds } });
+        trashedTasks.push(...moved.map(mapTask));
+      }
+      return handleRes(
+        res,
+        200,
+        true,
+        series ? "Task series moved to trash" : "Task moved to trash",
+        { trashedTasks }
+      );
     }
 
     default:

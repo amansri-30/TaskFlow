@@ -130,15 +130,15 @@ const moveDueDate = (task: any, nextDue: Date | null) => {
       // notification the user had already acknowledged.
       if (task.remindAt.getTime() <= Date.now()) task.remindAt = null;
     } else if (previousDue) {
-      // Preserve the same lead ahead of the due date. `>= 0` rather than `> 0`
-      // so an "at time of task" reminder (zero lead) follows the new date;
-      // the strict form left it pinned to the old time, firing at the wrong
-      // moment and then suppressing the reminder for the moved date.
+      // Carry the reminder by the same offset it had relative to the old due
+      // date. The lead may legitimately be negative: a reminder can be set
+      // *after* the due date as a follow-up nudge, and shifting only
+      // non-negative leads pinned that reminder to its old instant, so it fired
+      // at the wrong moment (or immediately) once the date moved. Zero lead
+      // ("at time of task") is handled by the same arithmetic.
       const leadMs = previousDue.getTime() - task.remindAt.getTime();
-      if (leadMs >= 0) {
-        const shifted = new Date(nextDue.getTime() - leadMs);
-        task.remindAt = shifted.getTime() > Date.now() ? shifted : null;
-      }
+      const shifted = new Date(nextDue.getTime() - leadMs);
+      task.remindAt = shifted.getTime() > Date.now() ? shifted : null;
     } else if (task.remindAt.getTime() <= Date.now()) {
       // A dateless task being given a date: an elapsed reminder is stale.
       task.remindAt = null;
@@ -635,19 +635,19 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
               (!until || candidate.getTime() <= until.getTime()) &&
               !liveDates.has(candidate.getTime())
             ) {
-              // Carry the reminder onto the next occurrence, but only when the
-              // gap between reminder and due date still holds — a reminder
-              // that would land in the past is dropped rather than firing
-              // instantly on a task nobody has seen yet. `>= 0` keeps an
-              // "at time of task" reminder (zero lead), which the strict form
-              // dropped entirely, silently removing the reminder from every
-              // future occurrence of a repeating task.
+              // Carry the reminder onto the next occurrence with the same offset
+              // it had on this one, before or after the due date. A post-due
+              // nudge (negative lead) used to be dropped from every successor
+              // because only non-negative leads were shifted; the offset is now
+              // preserved, and only an instant that would already be in the past
+              // is dropped rather than firing instantly on a task nobody has
+              // seen yet.
               const reminder = task.remindAt instanceof Date ? task.remindAt : null;
               const leadMs = reminder && task.scheduledAt instanceof Date
                 ? task.scheduledAt.getTime() - reminder.getTime()
                 : 0;
               let nextRemindAt: Date | null = null;
-              if (reminder && leadMs >= 0) {
+              if (reminder) {
                 const shifted = new Date(candidate.getTime() - leadMs);
                 nextRemindAt = shifted.getTime() > Date.now() ? shifted : null;
               }

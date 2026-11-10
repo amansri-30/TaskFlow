@@ -365,6 +365,13 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // survives re-renders and a half-picked value never applies on its own.
   const [reminderPickerOpen, setReminderPickerOpen] = useState(false);
   const [batchReminderDraft, setBatchReminderDraft] = useState("");
+  // Bulk reschedule picker. Presets cover the common "push it a week" moves, but
+  // a batch with a mixed set of due dates sometimes needs one specific day and
+  // time — the same custom instant the single-row dialog offers. The draft is
+  // local so a half-picked value never applies on its own and is cleared on
+  // close.
+  const [batchDeferOpen, setBatchDeferOpen] = useState(false);
+  const [batchDeferDraft, setBatchDeferDraft] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const pendingRef = useRef<Set<string>>(new Set());
   const [pendingOps, setPendingOps] = useState<Set<string>>(new Set());
@@ -3631,37 +3638,102 @@ function deferAnchor(task: Task, dueIso: string | null) {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <CalendarClock className="h-4 w-4 text-muted-foreground" />
-                    <Select
-                      key={`defer-${batchActionNonce}`}
-                      onValueChange={(v) => {
-                        setBatchActionNonce((n) => n + 1);
-                        // A batch has many different due dates, so presets
-                        // resolve against today rather than any one task.
-                        if (v === "none") {
-                          handleBatchDefer(null);
-                          return;
-                        }
-                        const when = resolveDeferPreset(v, null);
-                        if (when) handleBatchDefer(when.toISOString());
+                    <Popover
+                      open={batchDeferOpen}
+                      onOpenChange={(o) => {
+                        setBatchDeferOpen(o);
+                        if (!o) setBatchDeferDraft("");
                       }}
                     >
-                      <SelectTrigger
-                        className="h-8 min-w-[150px]"
-                        aria-label="Reschedule selected tasks"
-                      >
-                        <SelectValue placeholder="Reschedule" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DEFER_PRESETS.filter((p) => p.id !== "none").map(
-                          (preset) => (
-                            <SelectItem key={preset.id} value={preset.id}>
-                              {preset.label}
-                            </SelectItem>
-                          )
-                        )}
-                        <SelectItem value="none">No due date</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 min-w-[150px]"
+                          disabled={selectedTasks.length === 0}
+                          aria-label="Reschedule selected tasks"
+                        >
+                          Reschedule
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-64 p-2">
+                        <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+                          Move every selected task to
+                        </p>
+                        <div className="grid gap-0.5">
+                          {DEFER_PRESETS.filter((p) => p.id !== "none").map(
+                            (preset) => (
+                              <Button
+                                key={preset.id}
+                                variant="ghost"
+                                size="sm"
+                                className="justify-start font-normal"
+                                onClick={() => {
+                                  // A batch has many different due dates, so
+                                  // presets resolve against today rather than
+                                  // any one task.
+                                  const when = resolveDeferPreset(
+                                    preset.id,
+                                    null
+                                  );
+                                  if (when) {
+                                    handleBatchDefer(when.toISOString());
+                                  }
+                                  setBatchDeferOpen(false);
+                                }}
+                              >
+                                {preset.label}
+                              </Button>
+                            )
+                          )}
+                        </div>
+                        <div className="mt-1 border-t pt-1.5">
+                          <Input
+                            type="datetime-local"
+                            className="h-8"
+                            aria-label="Custom due date and time for selected tasks"
+                            value={batchDeferDraft}
+                            onChange={(e) =>
+                              setBatchDeferDraft(e.target.value)
+                            }
+                          />
+                          <Button
+                            size="sm"
+                            className="mt-1.5 h-8 w-full"
+                            disabled={!batchDeferDraft}
+                            onClick={() => {
+                              const when = new Date(batchDeferDraft);
+                              if (isNaN(when.getTime())) {
+                                toast.error("Pick a valid date and time");
+                                return;
+                              }
+                              if (when.getTime() <= Date.now()) {
+                                toast.error(
+                                  "That due date is already in the past"
+                                );
+                                return;
+                              }
+                              handleBatchDefer(when.toISOString());
+                              setBatchDeferDraft("");
+                              setBatchDeferOpen(false);
+                            }}
+                          >
+                            Set for all selected
+                          </Button>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="mt-1 h-8 w-full justify-start font-normal text-red-600 hover:text-red-600"
+                          onClick={() => {
+                            handleBatchDefer(null);
+                            setBatchDeferOpen(false);
+                          }}
+                        >
+                          Clear due dates
+                        </Button>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                   <Button
                     size="sm"

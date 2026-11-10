@@ -125,6 +125,12 @@ const SORT_OPTIONS: { value: SortMode; label: string }[] = [
   { value: "title", label: "Title A–Z" },
 ];
 
+// Relative reschedule choices for a batch: "push everything out a few days" is
+// the common real-world edit (a slipped deadline, a holiday week) and has no
+// equivalent among the absolute presets, which all collapse the selection onto
+// one shared date.
+const BATCH_SHIFT_DAYS = [1, 3, 7];
+
 /**
  * The exact field set a reschedule owns. Every defer path reconciles and rolls
  * back with this and nothing else, so a concurrent update on the same row (a
@@ -1274,8 +1280,30 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     } else if (filter.startsWith("list:")) {
       payload.list = filter.slice("list:".length);
     }
-    if (tags.length > 0) payload.tags = tags;
-    if (parsed.priority) payload.priority = parsed.priority;
+    // Same defaulting rule for the other view-scoped filters. Capturing while
+    // the sidebar shows `tag:home` used to create an untagged task, which then
+    // vanished from the very list it was typed in; the active tag is treated
+    // as a default, not a constraint, so an explicit `#tag` still wins and a
+    // multi-tag capture keeps all of its tags.
+    if (tags.length > 0) {
+      payload.tags = tags;
+    } else if (filter.startsWith("tag:")) {
+      payload.tags = [filter.slice("tag:".length)];
+    }
+    if (parsed.priority) {
+      payload.priority = parsed.priority;
+    } else if (filter.startsWith("priority:")) {
+      const viewPriority = filter.slice("priority:".length);
+      // Guard the slice: a malformed filter must not send an enum the server
+      // rejects with a 400 and a confusing toast.
+      if (
+        viewPriority === "low" ||
+        viewPriority === "medium" ||
+        viewPriority === "high"
+      ) {
+        payload.priority = viewPriority;
+      }
+    }
     if (parsed.recurrence) {
       payload.recurrence = parsed.recurrence;
       // Anchor the monthly repeat to the due date the user named, matching the
@@ -1630,7 +1658,15 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
           ? "trash"
           : filter.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") ||
             "all";
-    return `taskflow-${view}-${new Date().toISOString().slice(0, 10)}.${extension}`;
+    // Local calendar day, not the UTC one: an export taken at 8pm in UTC-5 is
+    // already "tomorrow" in UTC, so the filename disagreed with the day the
+    // user just worked through.
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(now.getDate()).padStart(2, "0")}`;
+    return `taskflow-${view}-${stamp}.${extension}`;
   };
   const downloadFile = (contents: BlobPart, type: string, name: string) => {
     const url = URL.createObjectURL(new Blob([contents], { type }));
@@ -1974,23 +2010,49 @@ function deferAnchor(task: Task, dueIso: string | null) {
     }
   };
 
-  const handleBatchDefer = async (dueIso: string | null) => {
+  // Reschedule every selected task. `dueIso` is one instant shared by the whole
+  // selection, `null` to clear it, or a per-row resolver. The resolver is what
+  // the relative shift needs: "+3 days" is a different instant for every row,
+  // and a row with no due date has no base to slide, so returning `undefined`
+  // leaves that row alone instead of inventing a date for it.
+  const handleBatchDefer = async (
+    dueIso: string | null | ((task: Task) => string | null | undefined),
+    successLabel?: string
+  ) => {
     if (selectedTasks.length === 0) return;
+    const target =
+      typeof dueIso === "function"
+        ? selectedTasks
+            .map((task) => ({ task, to: dueIso(task) }))
+            .filter(
+              (row): row is { task: Task; to: string | null } =>
+                row.to !== undefined
+            )
+        : selectedTasks.map((task) => ({ task, to: dueIso }));
+    // Only a resolver can drop rows (a shared destination always applies), so
+    // an empty plan means every selected task was ineligible.
+    if (target.length === 0) {
+      toast.error("Selected tasks have no due date to shift");
+      return;
+    }
     const previous = new Map(tasks.map((t) => [t.id, t]));
-    const target = selectedTasks;
-    const ids = new Set(target.map((t) => t.id));
+    const destination = new Map(target.map((row) => [row.task.id, row.to]));
     setTasks((prev) =>
       prev.map((t) =>
-        ids.has(t.id)
-          ? { ...t, scheduledAt: dueIso ?? undefined, remindedAt: null }
+        destination.has(t.id)
+          ? {
+              ...t,
+              scheduledAt: destination.get(t.id) ?? undefined,
+              remindedAt: null,
+            }
           : t
       )
     );
     const results = await Promise.allSettled(
-      target.map((t) =>
-        axios.patch(`/api/task/${t.id}`, {
-          deferTo: dueIso,
-          ...deferAnchor(t, dueIso),
+      target.map(({ task, to }) =>
+        axios.patch(`/api/task/${task.id}`, {
+          deferTo: to,
+          ...deferAnchor(task, to),
         })
       )
     );
@@ -2003,12 +2065,13 @@ function deferAnchor(task: Task, dueIso: string | null) {
     const moved: Task[] = [];
     let missingPayload = false;
     results.forEach((r, i) => {
+      const id = target[i].task.id;
       if (r.status === "rejected") {
-        failedIds.add(target[i].id);
+        failedIds.add(id);
         return;
       }
       const updated = r.value?.data?.task as Task | null | undefined;
-      if (updated) applied.set(target[i].id, dateFields(updated));
+      if (updated) applied.set(id, dateFields(updated));
       else missingPayload = true;
       const sideEffects = (r.value?.data?.movedTasks as Task[]) || [];
       moved.push(...sideEffects);
@@ -2025,13 +2088,20 @@ function deferAnchor(task: Task, dueIso: string | null) {
       toast.error(
         `Failed to reschedule ${failedIds.size} of ${target.length} tasks`
       );
-    } else if (dueIso) {
-      toast.success(
-        `Moved ${target.length} task${target.length > 1 ? "s" : ""} to ${deferLabel(dueIso)}`
-      );
     } else {
+      const destinations = target.map((row) => row.to);
+      // `undefined` means "not uniform" and is distinguishable from the uniform
+      // value `null` ("cleared"), which cannot be used as an existence test.
+      const uniform = destinations.every((d) => d === destinations[0])
+        ? destinations[0]
+        : undefined;
       toast.success(
-        `Cleared due date on ${target.length} task${target.length > 1 ? "s" : ""}`
+        successLabel ??
+          (uniform === null
+            ? `Cleared due date on ${plural(target.length, "task")}`
+            : typeof uniform === "string"
+              ? `Moved ${plural(target.length, "task")} to ${deferLabel(uniform)}`
+              : `Rescheduled ${plural(target.length, "task")}`)
       );
     }
     // Re-fetch when a response carried no task, or a task was moved to a
@@ -2046,7 +2116,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
     // date, and the next occurrence would still spawn on the wrong day.
     // Rows the server rejected are excluded: they never changed, so replaying
     // them would only risk overwriting a concurrent edit.
-    const undoable = target.filter((t) => !failedIds.has(t.id));
+    const undoable = target
+      .map((row) => row.task)
+      .filter((t) => !failedIds.has(t.id));
     if (undoable.length > 0) {
       pushUndo({
         kind: "edit",
@@ -2070,6 +2142,37 @@ function deferAnchor(task: Task, dueIso: string | null) {
         }),
       });
     }
+  };
+
+  // Relative shift. "+3 days" is not "move to the 15th": every row keeps its
+  // own date and only slides, so a mixed-date selection does not collapse onto
+  // one day. A row without a due date has nothing to shift, so it is skipped
+  // rather than given a date; an overdue row shifts from today so it lands in
+  // the future instead of staying overdue.
+  const handleBatchShift = (days: number) => {
+    if (selectedTasks.length === 0) return;
+    const shiftable = selectedTasks.filter((t) => hasDueDate(t));
+    if (shiftable.length === 0) {
+      toast.error("Selected tasks have no due date to shift");
+      return;
+    }
+    const skipped = selectedTasks.length - shiftable.length;
+    void handleBatchDefer(
+      (t) => {
+        if (!hasDueDate(t)) return undefined;
+        const current = t.scheduledAt ? new Date(t.scheduledAt) : new Date(NaN);
+        const base =
+          !isNaN(current.getTime()) && isAfter(current, new Date())
+            ? current
+            : new Date();
+        return addDays(base, days).toISOString();
+      },
+      `Shifted ${plural(shiftable.length, "task")} by ${plural(days, "day")}${
+        skipped > 0
+          ? ` — ${plural(skipped, "task")} without a due date skipped`
+          : ""
+      }`
+    );
   };
 
   /**
@@ -3686,6 +3789,28 @@ function deferAnchor(task: Task, dueIso: string | null) {
                               </Button>
                             )
                           )}
+                        </div>
+                        <div className="mt-1 border-t pt-1.5">
+                          <p className="px-1 pb-1 text-xs font-medium text-muted-foreground">
+                            Or shift each from its own date
+                          </p>
+                          <div className="grid grid-cols-3 gap-1">
+                            {BATCH_SHIFT_DAYS.map((days) => (
+                              <Button
+                                key={days}
+                                variant="outline"
+                                size="sm"
+                                className="h-8 px-1 text-xs"
+                                aria-label={`Shift selected tasks ${days} days later`}
+                                onClick={() => {
+                                  handleBatchShift(days);
+                                  setBatchDeferOpen(false);
+                                }}
+                              >
+                                +{days}d
+                              </Button>
+                            ))}
+                          </div>
                         </div>
                         <div className="mt-1 border-t pt-1.5">
                           <Input

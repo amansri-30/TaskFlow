@@ -1409,6 +1409,15 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
       }
     }
+    // Per-list totals for the sidebar badges. Keyed by the stored spelling,
+    // which is exactly what `filter === "list:<name>"` compares against, and
+    // counted over every non-trashed task so the number matches the rows the
+    // list shows (completed included, like the Today/Next 7 badges).
+    const listCounts: Record<string, number> = {};
+    for (const t of tasks) {
+      if (!t.list) continue;
+      listCounts[t.list] = (listCounts[t.list] || 0) + 1;
+    }
     const tags = Array.from(tagCounts.entries()).map(([name, count]) => ({
       name,
       count,
@@ -1425,6 +1434,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       next7: next7Count,
       noDueDate: noDueDateCount,
       tags,
+      lists: listCounts,
     });
   }, [tasks, onStatsChange]);
 

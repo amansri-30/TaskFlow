@@ -25,6 +25,18 @@ const FILTER_BY_NAME: Record<string, string> = {
   Pinned: "pinned",
 };
 
+// `min-w-6` rather than a fixed `w-6`: a fixed square clipped once a bucket
+// passed two digits, and three-digit totals are normal in a long-running
+// account. `ml-auto` pushes the count to the row's trailing edge.
+function SidebarCount({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <Badge className="ml-auto flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full px-1.5">
+      {count}
+    </Badge>
+  );
+}
+
 export const SideBarItems = ({
   SideBarList,
   listNames,
@@ -78,11 +90,7 @@ export const SideBarItems = ({
             )}
           >
             {icon} {name}
-            {count > 0 ? (
-              <Badge className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
-                {count}
-              </Badge>
-            ) : null}
+            <SidebarCount count={count} />
           </button>
         );
       })}
@@ -98,6 +106,7 @@ export const SideBarItems = ({
         )}
       >
         {listNames[0].icon} {listNames[0].name}
+        <SidebarCount count={stats.lists[listNames[0].name] ?? 0} />
       </button>
 
       <Separator />
@@ -117,6 +126,7 @@ export const SideBarItems = ({
             )}
           >
             {icon} {name}
+            <SidebarCount count={stats.lists[name] ?? 0} />
           </button>
         ))}
 
@@ -134,6 +144,7 @@ export const SideBarItems = ({
             )}
           >
             {name}
+            <SidebarCount count={stats.lists[name] ?? 0} />
           </button>
           <button
             aria-label={`Delete list ${name}`}

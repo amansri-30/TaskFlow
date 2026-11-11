@@ -13,6 +13,13 @@ export type TaskStats = {
   next7: number;
   noDueDate: number;
   tags: TagStat[];
+  /**
+   * Task count keyed by the exact stored list name, so the sidebar badge and
+   * the `list:<name>` filter (which compares with `===`) can never disagree.
+   * Completed tasks are included for the same reason they are in the other
+   * buckets: the list view shows them too.
+   */
+  lists: Record<string, number>;
 };
 
 export function Dashboard() {
@@ -23,6 +30,7 @@ export function Dashboard() {
     next7: 0,
     noDueDate: 0,
     tags: [],
+    lists: {},
   });
   const [search, setSearch] = useState<string>("");
 

@@ -194,6 +194,21 @@ function parseCsvDate(raw: string, endOfDay = false): string | null {
   return isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+/**
+ * Undo the formula-injection guard `csvField` adds on export.
+ *
+ * The exporter prefixes an apostrophe to any cell beginning with `=`, `+`,
+ * `-`, `@`, tab or CR so a spreadsheet treats it as text instead of running
+ * it. That apostrophe is an artefact of the export, not part of the task:
+ * without this step a round-trip turns "- call back" into "'- call back".
+ * Only an apostrophe immediately before one of those characters is removed,
+ * so text that merely starts with `'` is untouched. The one case that cannot
+ * be told apart — a title that genuinely begins `'-` — is read as the guard,
+ * which is the far likelier origin.
+ */
+const unguardCell = (value: string) =>
+  /^'[=+\-@\t\r]/.test(value) ? value.slice(1) : value;
+
 const TRUE_VALUES = /^(y|yes|true|1|done|complete|completed|x|✓)$/i;
 
 const parseBool = (raw: string) => TRUE_VALUES.test(raw.trim());
@@ -255,7 +270,7 @@ export function csvToTaskSeeds(text: string): CsvTaskSeed[] {
 
     // Without a Title header the first column is the task, which is what a
     // spreadsheet of pasted names looks like.
-    const title = cell("title") || (row[0] ?? "").trim();
+    const title = unguardCell(cell("title") || (row[0] ?? "").trim());
     if (!title) continue;
 
     const seed: CsvTaskSeed = { title };
@@ -263,7 +278,7 @@ export function csvToTaskSeeds(text: string): CsvTaskSeed[] {
     const list = cell("list");
     // Lists are stored lowercase (the quick-add parser and custom lists both
     // normalize that way), so "Work" and "work" cannot become two sidebars.
-    if (list) seed.list = list.toLowerCase();
+    if (list) seed.list = unguardCell(list).toLowerCase();
 
     const priority = cell("priority").toLowerCase();
     if (priority === "low" || priority === "medium" || priority === "high") {
@@ -288,7 +303,7 @@ export function csvToTaskSeeds(text: string): CsvTaskSeed[] {
 
     Object.assign(seed, parseRepeat(cell("repeat")));
 
-    const tags = cell("tags")
+    const tags = unguardCell(cell("tags"))
       .split(/[,;]/)
       .map((tag) => tag.trim())
       .filter(Boolean);
@@ -304,10 +319,10 @@ export function csvToTaskSeeds(text: string): CsvTaskSeed[] {
 
     if (parseBool(cell("pinned"))) seed.pinned = true;
 
-    const description = cell("description");
+    const description = unguardCell(cell("description"));
     if (description) seed.description = description;
 
-    const notes = cell("notes");
+    const notes = unguardCell(cell("notes"));
     if (notes) seed.notes = notes;
 
     seeds.push(seed);

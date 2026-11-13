@@ -11,6 +11,12 @@ export type TaskStats = {
   today: number;
   scheduled: number;
   next7: number;
+  /**
+   * Open tasks whose due instant is before today's start. Unlike the buckets
+   * below this deliberately excludes completed rows, because the Overdue view
+   * it badges hides them too.
+   */
+  overdue: number;
   noDueDate: number;
   tags: TagStat[];
   /**
@@ -28,6 +34,7 @@ export function Dashboard() {
     today: 0,
     scheduled: 0,
     next7: 0,
+    overdue: 0,
     noDueDate: 0,
     tags: [],
     lists: {},

@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 const FILTER_BY_NAME: Record<string, string> = {
   Inbox: "all",
   Today: "today",
+  Overdue: "overdue",
   Scheduled: "scheduled",
   "Next 7 days": "next7",
   "No due date": "nodate",
@@ -28,10 +29,23 @@ const FILTER_BY_NAME: Record<string, string> = {
 // `min-w-6` rather than a fixed `w-6`: a fixed square clipped once a bucket
 // passed two digits, and three-digit totals are normal in a long-running
 // account. `ml-auto` pushes the count to the row's trailing edge.
-function SidebarCount({ count }: { count: number }) {
+function SidebarCount({
+  count,
+  destructive,
+}: {
+  count: number;
+  destructive?: boolean;
+}) {
   if (count <= 0) return null;
   return (
-    <Badge className="ml-auto flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full px-1.5">
+    <Badge
+      className={cn(
+        "ml-auto flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full px-1.5",
+        // Overdue is the one count that asks for action rather than reporting
+        // state, so it carries the same red the popover uses for overdue rows.
+        destructive && "bg-red-600 text-white hover:bg-red-600 dark:bg-red-500"
+      )}
+    >
       {count}
     </Badge>
   );
@@ -64,9 +78,12 @@ export const SideBarItems = ({
         // "Filter & Label" is a section heading here, not a filter — sharing
         // the "all" value with Inbox would double-highlight both on load.
         const isHeading = name === "Filter & Label";
+        const isOverdue = name === "Overdue";
         const count =
           name === "Today"
             ? stats.today
+            : name === "Overdue"
+            ? stats.overdue
             : name === "Scheduled"
             ? stats.scheduled
             : name === "Next 7 days"
@@ -86,11 +103,12 @@ export const SideBarItems = ({
               isHeading
                 ? "font-semibold text-muted-foreground cursor-default"
                 : "hover:text-primary",
+              !isHeading && isOverdue && count > 0 && "text-red-600 dark:text-red-400",
               !isHeading && activeFilter === value && "bg-muted text-primary"
             )}
           >
             {icon} {name}
-            <SidebarCount count={count} />
+            <SidebarCount count={count} destructive={isOverdue} />
           </button>
         );
       })}

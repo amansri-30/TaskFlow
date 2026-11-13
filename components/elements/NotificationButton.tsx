@@ -1,5 +1,5 @@
 "use client";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
@@ -19,6 +19,11 @@ export default function NotificationButton() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  // The bell refetches on mount, on focus, on every task event and on each
+  // popover open. Showing "Loading alerts..." for all of those blanked a
+  // popover that already had alerts in it, so the panel flickered every time
+  // the user looked at it. Only the first fetch has nothing to show.
+  const loadedRef = useRef(false);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -26,9 +31,13 @@ export default function NotificationButton() {
       // `alerts=1` asks the server for only the four fields this popover reads,
       // instead of every task's notes and full subtask array.
       const response = await axios.get("/api/getalltasks?alerts=1");
+      loadedRef.current = true;
       setTasks(response.data.tasks || []);
     } catch {
-      setTasks([]);
+      // A transient failure keeps the last known alerts on screen. Clearing
+      // them turned a dropped request into "No new notification", which reads
+      // as "nothing is due" rather than "the check failed".
+      if (!loadedRef.current) setTasks([]);
     } finally {
       setLoading(false);
     }
@@ -128,7 +137,7 @@ export default function NotificationButton() {
           </Badge>
         </div>
         <Separator />
-        {loading ? (
+        {loading && !loadedRef.current ? (
           <p className="p-4 text-sm text-muted-foreground">Loading alerts...</p>
         ) : alertCount === 0 ? (
           <div className="flex flex-col items-center gap-2 p-6 text-center">

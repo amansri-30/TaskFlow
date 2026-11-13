@@ -251,6 +251,13 @@ export default function TaskList({
   const [quickTitle, setQuickTitle] = useState("");
   const [quickAdding, setQuickAdding] = useState(false);
   const [loading, setLoading] = useState<boolean>(true);
+  // Only the first fetch may swap the page for the skeleton. Every later one
+  // (quick add, palette create, import, retry) refetches after an optimistic
+  // update has already put the row on screen; raising the full-page loading
+  // flag there replaced the whole list with placeholders for each round-trip,
+  // so a capture looked like it had thrown away the view it was typed in.
+  const initialLoadDone = useRef(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<boolean>(false);
   const [refreshKey, setRefreshKey] = useState<number>(0);
@@ -912,10 +919,12 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   };
 
   const fetchTasks = useCallback(async () => {
-    setLoading(true);
+    if (initialLoadDone.current) setRefreshing(true);
+    else setLoading(true);
     setError(null);
     try {
       const response = await axios.get("/api/getalltasks");
+      initialLoadDone.current = true;
       setTasks(response.data.tasks || []);
       setTrashed(response.data.trashed || []);
       // Prune restored entries whose rows are gone for good. A persisted stack
@@ -968,11 +977,18 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         router.replace("/login?expired=1");
         return;
       }
-      setError("Failed fetching tasks. Try refreshing the page.");
+      // A background refresh that fails should not blank a list the user is
+      // already working in: the previous rows are still the last known truth,
+      // and the toast reports the failure. Only the initial load, which has
+      // nothing to preserve, falls through to the error screen.
+      if (!initialLoadDone.current) {
+        setError("Failed fetching tasks. Try refreshing the page.");
+        setTasks(emptyTasks);
+      }
       toast.error("Failed fetching tasks. Try refreshing the page.");
-      setTasks(emptyTasks);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [dispatch, router]);
 
@@ -1428,10 +1444,21 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     const clock = new Date();
     const next7Count = tasks.filter((t) => isDueWithinDays(t, clock)).length;
     const noDueDateCount = tasks.filter((t) => !hasDueDate(t)).length;
+    // Matches `matchesFilter("overdue")` exactly: a dated, unfinished task
+    // whose due instant is before today's start. Completed rows are excluded
+    // here even though the other badges include them, because the Overdue view
+    // itself hides them -- a badge counting finished work would send the user
+    // to a list that does not contain it.
+    const overdueCount = tasks.filter((t) => {
+      if (!t.scheduledAt || t.completed) return false;
+      const d = new Date(t.scheduledAt);
+      return !isNaN(d.getTime()) && isBefore(d, startOfDay(clock));
+    }).length;
     onStatsChange({
       today: todayCount,
       scheduled: scheduledCount,
       next7: next7Count,
+      overdue: overdueCount,
       noDueDate: noDueDateCount,
       tags,
       lists: listCounts,
@@ -4019,7 +4046,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
             ) : null}
             {importExportControls}
             <span className="ml-auto text-xs text-muted-foreground">
-              {filtered.length} shown
+              {filtered.length} shown{refreshing ? " · refreshing…" : ""}
             </span>
           </div>
 

@@ -46,6 +46,8 @@ Undo2,
   Plus,
   Minus,
   X,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
 import {
@@ -188,6 +190,7 @@ function previewDueLabel(date: Date): string {
 }
 
 const GROUP_PREF_KEY = "taskflow:groupByDue";
+const HIDE_COMPLETED_PREF_KEY = "taskflow:hideCompleted";
 
 /**
  * An undoable action, newest last. `edit` entries store a per-row PATCH body
@@ -264,6 +267,10 @@ export default function TaskList({
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
   const [sort, setSort] = useState<SortMode>("smart");
   const [groupByDue, setGroupByDue] = useState<boolean>(false);
+  // View preference, persisted like grouping: long "All" lists drown the open
+  // work in closed rows. Default off so existing behaviour is unchanged until
+  // the user asks for it.
+  const [hideCompleted, setHideCompleted] = useState<boolean>(false);
   const [importing, setImporting] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   /**
@@ -1393,6 +1400,39 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       // Preference simply will not persist.
     }
   }, [groupByDue]);
+  useEffect(() => {
+    try {
+      setHideCompleted(
+        window.localStorage.getItem(HIDE_COMPLETED_PREF_KEY) === "true"
+      );
+    } catch {
+      // Private mode or a blocked storage partition: keep the default.
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        HIDE_COMPLETED_PREF_KEY,
+        String(hideCompleted)
+      );
+    } catch {
+      // Preference simply will not persist.
+    }
+  }, [hideCompleted]);
+  // Hiding completed rows is a view preference, not a data change. A completed
+  // row that disappears while checked must not stay in the batch selection:
+  // the toolbar would then retag or delete rows the user cannot see.
+  useEffect(() => {
+    if (!hideCompleted) return;
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const completedIds = new Set(
+        tasks.filter((t) => t.completed).map((t) => t.id)
+      );
+      if (!Array.from(prev).some((id) => completedIds.has(id))) return prev;
+      return new Set(Array.from(prev).filter((id) => !completedIds.has(id)));
+    });
+  }, [hideCompleted, tasks]);
 
   const total = tasks.length;
   const completedCount = tasks.filter((t) => t.completed).length;
@@ -1597,7 +1637,17 @@ const matchesSearch = (t: Task) => {
   return searchQuery.text.every((word) => haystack.includes(word));
 };
 
-const filtered = tasks.filter((t) => matchesFilter(t) && matchesSearch(t));
+// Everything the active filter and search match. The alias below then applies
+// the hide-completed preference, so selection, exports, batch actions and the
+// "N shown" footer agree on what is actually on screen. Sidebar badges and the
+// overview deliberately keep counting the whole task set.
+const searchFiltered = tasks.filter((t) => matchesFilter(t) && matchesSearch(t));
+const filtered = hideCompleted
+  ? searchFiltered.filter((t) => !t.completed)
+  : searchFiltered;
+const hiddenCompletedCount = hideCompleted
+  ? searchFiltered.reduce((count, t) => (t.completed ? count + 1 : count), 0)
+  : 0;
 
 const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : [];
 
@@ -3951,6 +4001,28 @@ function deferAnchor(task: Task, dueIso: string | null) {
                 </Button>
               </div>
             )}
+            {!trashView && (
+              <div className="flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant={hideCompleted ? "secondary" : "outline"}
+                  onClick={() => setHideCompleted((v) => !v)}
+                  aria-pressed={hideCompleted}
+                  title={
+                    hideCompleted
+                      ? "Show completed tasks again"
+                      : "Hide completed tasks from this view"
+                  }
+                >
+                  {hideCompleted ? (
+                    <EyeOff className="mr-1.5 h-4 w-4" />
+                  ) : (
+                    <Eye className="mr-1.5 h-4 w-4" />
+                  )}
+                  Hide completed
+                </Button>
+              </div>
+            )}
             <div className="flex items-center gap-1.5">
               <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
               <Select value={sort} onValueChange={(v) => setSort(v as SortMode)}>
@@ -4046,7 +4118,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
             ) : null}
             {importExportControls}
             <span className="ml-auto text-xs text-muted-foreground">
-              {filtered.length} shown{refreshing ? " · refreshing…" : ""}
+              {filtered.length} shown
+              {hiddenCompletedCount > 0
+                ? ` · ${hiddenCompletedCount} completed hidden`
+                : ""}
+              {refreshing ? " · refreshing…" : ""}
             </span>
           </div>
 
@@ -4295,9 +4371,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
                 ))
               ) : (
                 <p className="text-muted-foreground">
-                  {term || filter !== "all"
-                    ? "No matching tasks"
-                    : "No tasks yet — add one below!"}
+                  {hiddenCompletedCount > 0
+                    ? "Nothing open here — show completed tasks to see the rest."
+                    : term || filter !== "all"
+                      ? "No matching tasks"
+                      : "No tasks yet — add one below!"}
                 </p>
               )}
               <div className="px-1 mt-1">

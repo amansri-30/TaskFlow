@@ -100,6 +100,15 @@ export function AddTaskInlineModal({
 
   async function onSubmit(data: z.infer<typeof FormSchema>) {
     if (submitting) return;
+    // "Pick date & time" is an explicit request for a reminder, but the custom
+    // field starts empty and `resolveReminderAt` turns an empty custom value
+    // into "no reminder". The task was then created with no feedback at all,
+    // which reads as the reminder having been silently ignored. Stop before
+    // the request so the user either fills the time in or picks another preset.
+    if (data.reminder === "custom" && !data.remindAt) {
+      toast.error("Pick a date and time for the reminder, or choose No reminder");
+      return;
+    }
     // The calendar picks a DAY, but the due instant is what a lead-time reminder
     // is anchored to. Without a time the task defaulted to local midnight, so
     // "1 hour before" fired the night before. Combine the two fields here rather

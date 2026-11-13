@@ -34,7 +34,11 @@ export default function CreateListDialog({
       toast.error("List already exists or you reached the 20-list limit");
       return;
     }
-    toast.success(`List "${listName.trim()}" created`);
+    // Report the name that was actually stored: `addCustomList` trims and
+    // lowercases, so echoing the raw input ("Work") announced a list whose
+    // sidebar row and `list:` filter spell "work".
+    const stored = result.lists[result.lists.length - 1];
+    toast.success(`List "${stored}" created`);
     setListName("");
     onCreated?.();
   }

@@ -411,6 +411,17 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
 
   const resetSelection = () => setSelectedIds(new Set());
 
+  // Remove specific ids from the batch selection without disturbing the rest.
+  // Used by trash actions: a restored or permanently deleted bin row must not
+  // keep counting in the toolbar that triggered it.
+  const dropFromSelection = (...ids: string[]) =>
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const gone = new Set(ids);
+      if (!Array.from(prev).some((id) => gone.has(id))) return prev;
+      return new Set(Array.from(prev).filter((id) => !gone.has(id)));
+    });
+
   const toggleEdit = () => {
     if (edit) resetSelection();
     setEdit((prev) => !prev);
@@ -428,6 +439,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     });
 
   const selectedTasks = tasks.filter((t) => selectedIds.has(t.id));
+  const selectedTrashed = trashed.filter((t) => selectedIds.has(t.id));
   const selectedIncomplete = selectedTasks.filter((t) => !t.completed);
   const selectedCompleted = selectedTasks.filter((t) => t.completed);
 
@@ -1421,9 +1433,11 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   }, [hideCompleted]);
   // Hiding completed rows is a view preference, not a data change. A completed
   // row that disappears while checked must not stay in the batch selection:
-  // the toolbar would then retag or delete rows the user cannot see.
+  // the toolbar would then retag or delete rows the user cannot see. Trash is
+  // exempt: hide-completed does not apply there, and its rows keep their
+  // `completed` flag, so pruning here used to erase a valid trash selection.
   useEffect(() => {
-    if (!hideCompleted) return;
+    if (!hideCompleted || filter === "trash") return;
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
       const completedIds = new Set(
@@ -1432,7 +1446,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       if (!Array.from(prev).some((id) => completedIds.has(id))) return prev;
       return new Set(Array.from(prev).filter((id) => !completedIds.has(id)));
     });
-  }, [hideCompleted, tasks]);
+  }, [hideCompleted, tasks, filter]);
 
   const total = tasks.length;
   const completedCount = tasks.filter((t) => t.completed).length;
@@ -1670,9 +1684,20 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
   const pinFirst = (a: Task, b: Task) =>
     Number(b.pinned ?? false) - Number(a.pinned ?? false);
   const completed = [...filtered.filter((t) => t.completed)].sort(pinFirst);
+  // "Clear completed" is an action over the whole filtered view, not only the
+  // rows currently painted: with Hide completed on, `completed` is empty while
+  // the footer reports "N completed hidden", so the button sat at (0) and was
+  // disabled. Target the pre-hide set so the count, the confirm dialog and the
+  // delete all agree with that tally.
+  const clearableCompleted = [
+    ...searchFiltered.filter((t) => t.completed),
+  ].sort(pinFirst);
 
   const allShownSelected =
     filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id));
+  const allTrashedShownSelected =
+    trashedFiltered.length > 0 &&
+    trashedFiltered.every((t) => selectedIds.has(t.id));
   const batchListOptions = Array.from(
     new Set<string>([
       ...listNames.map((item) => item.name),
@@ -1726,10 +1751,11 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
   // A selection narrows every export to exactly the checked rows, even when
   // those rows span several views. Without a selection the file still matches
   // the list the control sat next to - in the Trash view that is the trashed
-  // rows, not the active list. Selection does not leak into Trash: its rows
-  // are not selectable, and exporting active tasks from a bin view would be
-  // surprising. The scope is part of the filename, so exports taken from
-  // different views or selections do not overwrite each other in Downloads.
+  // rows, not the active list. Trash's own selection is deliberately excluded:
+  // it drives Restore / Delete forever, and exporting active tasks from a bin
+  // view would be surprising. The scope is part of the filename, so exports
+  // taken from different views or selections do not overwrite each other in
+  // Downloads.
   const exportSelection = !trashView ? selectedTasks : [];
   const exportRows = () =>
     exportSelection.length > 0
@@ -2401,9 +2427,16 @@ function deferAnchor(task: Task, dueIso: string | null) {
       setTrashed(freshTrashed);
       // Re-sync the batch selection against the freshly fetched id set so the
       // "N selected" counter can never reference tasks that no longer exist.
+      // Trashed ids count as live too: the Trash view is selectable now, and a
+      // background refresh (reminder scan, focus, bell event) would otherwise
+      // silently wipe a trash selection. Ids a handler intentionally removed
+      // are pruned by that handler, not here.
       setSelectedIds((prev) => {
         if (prev.size === 0) return prev;
-        const live = new Set(freshTasks.map((t: Task) => t.id));
+        const live = new Set<string>([
+          ...freshTasks.map((t: Task) => t.id),
+          ...freshTrashed.map((t: Task) => t.id),
+        ]);
         return new Set(Array.from(prev).filter((id) => live.has(id)));
       });
     } catch {
@@ -2469,10 +2502,15 @@ function deferAnchor(task: Task, dueIso: string | null) {
 /**
    * A permanent delete invalidates any pending undo that referenced those rows,
    * so the history cannot offer to restore a task that no longer exists. Edit
-   * entries are left alone: they only rewrite a field, which is still a valid
-   * request for a task that no longer needs restoring.
+   * rows go too: replaying a field PATCH against a permanently deleted id can
+   * only 404.
+   *
+   * Restoring a trashed task is the exception. It makes the row live again, so
+   * a field undo recorded before it was trashed is still valid — pass
+   * `keepEdits` to drop only the delete/import entries that the restore itself
+   * already inverted.
    */
-  const forgetUndoFor = (...ids: string[]) => {
+  const forgetUndoFor = (ids: string[], keepEdits = false) => {
     const gone = new Set(ids);
     setUndoStack((prev) =>
       prev
@@ -2491,6 +2529,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
                 }
               : null;
           }
+          if (keepEdits) return entry;
           // An edit entry can no longer restore a field on a task that is gone
           // for good, so drop those rows too (and the entry once it is empty).
           const keptPrev = entry.prev.filter((p) => !gone.has(p.id));
@@ -2923,8 +2962,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
   };
 
   const handleClearCompleted = async () => {
-    // Clear only the visible completed tasks (respects the active filter/search).
-    const done = completed;
+    // Clear the completed tasks in the filtered view, including rows currently
+    // hidden by the Hide completed toggle. Those rows are still part of "this
+    // view" — the footer counts them — so leaving them behind made the action
+    // disagree with the number it just showed.
+    const done = clearableCompleted;
     if (done.length === 0) return;
     const ids = new Set(done.map((t) => t.id));
     setTasks((prev) => prev.filter((t) => !ids.has(t.id)));
@@ -3050,7 +3092,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
     try {
       await axios.patch(`/api/task/${task.id}`, { restore: true });
       setTrashed((prev) => prev.filter((t) => t.id !== task.id));
-      forgetUndoFor(task.id);
+      dropFromSelection(task.id);
+      // The delete entry that sent this row to Trash is now inverted. Field
+      // edits recorded before the delete are still valid, though: the task is
+      // live again, so keep those.
+      forgetUndoFor([task.id], true);
       await refreshSilently();
       toast.success("Task restored from trash");
     } catch {
@@ -3069,7 +3115,8 @@ function deferAnchor(task: Task, dueIso: string | null) {
     try {
       await axios.delete(`/api/task/${task.id}?permanent=true`);
       setTrashed((prev) => prev.filter((t) => t.id !== task.id));
-      forgetUndoFor(task.id);
+      dropFromSelection(task.id);
+      forgetUndoFor([task.id]);
       // A permanent delete also removes this chain's pending occurrence on the
       // server (the successor a completed recurring task spawned). That row is
       // still in the active list here, so refetch instead of leaving a phantom
@@ -3078,6 +3125,93 @@ function deferAnchor(task: Task, dueIso: string | null) {
       toast.success("Task permanently deleted");
     } catch {
       toast.error("Could not delete task");
+    }
+  };
+
+  /**
+   * Select every row the Trash view is currently showing (search included),
+   * mirroring the active list's "Select all shown" control.
+   */
+  const handleTrashSelectAllShown = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allTrashedShownSelected) {
+        trashedFiltered.forEach((t) => next.delete(t.id));
+      } else {
+        trashedFiltered.forEach((t) => next.add(t.id));
+      }
+      return next;
+    });
+  };
+
+  /**
+   * Restore every selected trash row in one go. The rows leave the bin
+   * optimistically, but a failed PATCH puts its row back so a partial result is
+   * never hidden — the same contract `handleEmptyTrash` uses.
+   */
+  const handleBatchRestoreTrashed = async () => {
+    const target = selectedTrashed;
+    if (target.length === 0) return;
+    const ids = new Set(target.map((t) => t.id));
+    setTrashed((prev) => prev.filter((t) => !ids.has(t.id)));
+    dropFromSelection(...Array.from(ids));
+    const results = await Promise.allSettled(
+      target.map((t) => axios.patch(`/api/task/${t.id}`, { restore: true }))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    const succeeded = target.filter((_, i) => results[i].status === "fulfilled");
+    if (failed.length > 0) {
+      setTrashed((prev) => [
+        ...failed.filter((t) => !prev.some((x) => x.id === t.id)),
+        ...prev,
+      ]);
+    }
+    if (succeeded.length > 0) {
+      // The restore inverts these delete entries; field edits survive.
+      forgetUndoFor(
+        succeeded.map((t) => t.id),
+        true
+      );
+    }
+    await refreshSilently();
+    if (failed.length > 0) {
+      toast.error(`Could not restore ${plural(failed.length, "task")}`);
+    } else {
+      toast.success(`Restored ${plural(target.length, "task")} from trash`);
+    }
+  };
+
+  /** Permanently delete every selected trash row, keeping failed rows in bin. */
+  const handleBatchDeleteForever = async () => {
+    const target = selectedTrashed;
+    if (target.length === 0) return;
+    if (
+      !window.confirm(
+        `Permanently delete ${plural(target.length, "task")}? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    const results = await Promise.allSettled(
+      target.map((t) => axios.delete(`/api/task/${t.id}?permanent=true`))
+    );
+    const failed = target.filter((_, i) => results[i].status === "rejected");
+    const succeeded = target.filter((_, i) => results[i].status === "fulfilled");
+    const succeededIds = new Set(succeeded.map((t) => t.id));
+    setTrashed((prev) => prev.filter((t) => !succeededIds.has(t.id)));
+    dropFromSelection(...Array.from(succeededIds));
+    if (succeeded.length > 0) {
+      // Gone for good, so neither a delete/import restore nor an edit replay
+      // can still do anything useful.
+      forgetUndoFor(succeeded.map((t) => t.id));
+      // Successful permanent deletes may also have removed pending recurrence
+      // successors from the active list.
+      await refreshSilently();
+    }
+    if (failed.length > 0) {
+      toast.error(`Failed to permanently delete ${plural(failed.length, "task")}`);
+    } else {
+      toast.success(`Permanently deleted ${plural(target.length, "task")}`);
     }
   };
 
@@ -3103,7 +3237,8 @@ function deferAnchor(task: Task, dueIso: string | null) {
       );
       // The fulfilled rows are gone for good, so any undo entry that could
       // restore them is dead weight.
-      forgetUndoFor(...succeeded.map((t) => t.id));
+      forgetUndoFor(succeeded.map((t) => t.id));
+      dropFromSelection(...succeeded.map((t) => t.id));
       // Successful permanent deletes may also have removed pending recurrence
       // successors from the active list.
       await refreshSilently();
@@ -3116,7 +3251,8 @@ function deferAnchor(task: Task, dueIso: string | null) {
     // Every row an undo could restore is gone. Forget just those ids rather
     // than wiping the whole history, which used to throw away still-valid
     // edit entries for tasks that were never in the trash.
-    forgetUndoFor(...trashed.map((t) => t.id));
+    forgetUndoFor(trashed.map((t) => t.id));
+    dropFromSelection(...trashed.map((t) => t.id));
     // Pending occurrences of any deleted recurring parents are gone server-side.
     await refreshSilently();
     toast.success("Trash emptied");
@@ -3279,6 +3415,59 @@ function deferAnchor(task: Task, dueIso: string | null) {
             </div>
           </div>
 
+          {/* Trash select mode. `Select` in the header toggles `edit` for the
+              whole page, so the bin reuses it: each row gains a checkbox and
+              this toolbar restores or permanently deletes the picked rows in
+              one round trip instead of one confirm per row. */}
+          {edit && (
+            <div
+              className={`rounded-lg border p-3 transition-colors ${
+                selectedTrashed.length > 0
+                  ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"
+                  : "border-dashed border-muted-foreground/30"
+              }`}
+            >
+              {selectedTrashed.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold tabular-nums">
+                    {selectedTrashed.length} selected
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleTrashSelectAllShown}
+                  >
+                    {allTrashedShownSelected ? "Deselect all" : "Select all shown"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={resetSelection}>
+                    Clear
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleBatchRestoreTrashed}
+                  >
+                    <Undo2 className="mr-1.5 h-4 w-4" />
+                    Restore selected
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleBatchDeleteForever}
+                  >
+                    <Trash2 className="mr-1.5 h-4 w-4" />
+                    Delete forever
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Click checkboxes to select trashed tasks for restore or
+                  permanent delete.
+                </p>
+              )}
+            </div>
+          )}
+
           {trashedFiltered.length > 0 ? (
             <div className="flex flex-col py-4 px-2 border rounded-lg border-dashed shadow-sm">
               {trashedFiltered.map((task) => (
@@ -3287,6 +3476,14 @@ function deferAnchor(task: Task, dueIso: string | null) {
                   className="flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group hover:bg-gray-100 dark:hover:bg-neutral-800"
                 >
                   <div className="flex items-center min-w-0 gap-2">
+                    {edit && (
+                      <Checkbox
+                        checked={selectedIds.has(task.id)}
+                        onCheckedChange={() => handleSelect(task.id)}
+                        aria-label={`Select trashed task "${task.title}"`}
+                        className="h-4 w-4 shrink-0"
+                      />
+                    )}
                     <span className="text-sm font-medium p-2 leading-none truncate">
                       {task.title}
                     </span>
@@ -3978,13 +4175,13 @@ function deferAnchor(task: Task, dueIso: string | null) {
               size="sm"
               variant="outline"
               onClick={() => setConfirmClear(true)}
-              disabled={completed.length === 0}
+              disabled={clearableCompleted.length === 0}
               className="text-red-600 hover:text-red-600"
             >
               <Trash2 className="mr-1.5 h-4 w-4" />
               Clear completed
               <span className="ml-1 text-muted-foreground">
-                ({completed.length})
+                ({clearableCompleted.length})
               </span>
             </Button>
             {!trashView && (
@@ -4218,9 +4415,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
               <DialogHeader>
                 <DialogTitle>Clear completed tasks?</DialogTitle>
                 <DialogDescription>
-                  This will move {completed.length} completed task
-                  {completed.length === 1 ? "" : "s"} to Trash. You can restore
-                  them from Trash later.
+                  This will move {clearableCompleted.length} completed task
+                  {clearableCompleted.length === 1 ? "" : "s"} to Trash. You can
+                  restore them from Trash later.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter className="flex gap-2 sm:justify-end">

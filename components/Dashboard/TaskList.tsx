@@ -49,7 +49,7 @@ Undo2,
   Eye,
   EyeOff,
 } from "lucide-react";
-import { isSameDay, startOfDay, isBefore, addDays, isAfter } from "date-fns";
+import { isSameDay, startOfDay, isBefore, addDays, isAfter, formatDistanceToNow } from "date-fns";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -3487,7 +3487,8 @@ function deferAnchor(task: Task, dueIso: string | null) {
                     <span className="text-sm font-medium p-2 leading-none truncate">
                       {task.title}
                     </span>
-                    {task.scheduledAt && <DueLabel task={task} />}
+                    {task.scheduledAt && <DueLabel task={task} neutral />}
+                    <TrashedAtLabel trashedAt={task.trashedAt} />
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
@@ -5378,7 +5379,7 @@ function RecurrenceLabel({
 
 // --------------------------------------------------------------------------------------
 
-function DueLabel({ task }: { task: Task }) {
+function DueLabel({ task, neutral = false }: { task: Task; neutral?: boolean }) {
   const { scheduledAt, completed } = task;
   const due = scheduledAt ? new Date(scheduledAt) : null;
   const invalid = !due || isNaN(due.getTime());
@@ -5388,7 +5389,13 @@ function DueLabel({ task }: { task: Task }) {
   let label: string;
   let tone: string;
 
-  if (isSameDay(due, today)) {
+  if (neutral) {
+    // A trashed row is not actionable, so it must never wear the red "Overdue"
+    // chip: the task is already dealt with, and resurrecting it does not make
+    // it late. Show the plain date instead of a relative urgency label.
+    label = dateFnsFormat(due);
+    tone = "text-muted-foreground";
+  } else if (isSameDay(due, today)) {
     label = "Today";
     tone = completed
       ? "text-muted-foreground"
@@ -5408,6 +5415,30 @@ function DueLabel({ task }: { task: Task }) {
     >
       <CalendarDays className="h-3 w-3" />
       {label}
+    </span>
+  );
+}
+
+/**
+ * "Deleted 2 hours ago" for a trashed row. `trashedAt` is written by the
+ * server on a soft delete and by the optimistic local trash path, but rows
+ * imported into the bin historically carry no stamp, so a missing or corrupt
+ * value renders nothing rather than "Invalid Date".
+ */
+function TrashedAtLabel({ trashedAt }: { trashedAt?: string | null }) {
+  if (!trashedAt) return null;
+  const deleted = new Date(trashedAt);
+  if (isNaN(deleted.getTime())) return null;
+  // A clock-skewed stamp in the near future would otherwise read "Deleted in
+  // 3 minutes"; measuring from now says "less than a minute ago" instead.
+  const when = deleted.getTime() > Date.now() ? new Date() : deleted;
+  return (
+    <span
+      className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
+      title={deleted.toLocaleString()}
+    >
+      <Trash2 className="h-3 w-3" />
+      Deleted {formatDistanceToNow(when, { addSuffix: true })}
     </span>
   );
 }

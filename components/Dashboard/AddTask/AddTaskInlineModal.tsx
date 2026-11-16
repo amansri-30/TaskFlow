@@ -53,6 +53,8 @@ const FormSchema = z.object({
   list: z.string().default(""),
   priority: z.enum(["low", "medium", "high"]).default("medium"),
   recurrence: z.enum(["none", "daily", "weekly", "monthly"]).default("none"),
+  // End of the repeat series, as a local YYYY-MM-DD value for <input type="date">.
+  repeatUntil: z.string().optional().default(""),
   tagsText: z.string().default(""),
   reminder: z.enum([
     "none",
@@ -86,6 +88,7 @@ export function AddTaskInlineModal({
       list: "default",
       priority: "medium",
       recurrence: "none",
+      repeatUntil: "",
       tagsText: "",
       reminder: "none",
       remindAt: "",
@@ -143,6 +146,13 @@ export function AddTaskInlineModal({
       list: data.list,
       priority: data.priority,
       recurrence: data.recurrence,
+      // Parsed as local end-of-day, matching the edit dialog and the date
+      // picker's wall-clock reading. Only meaningful for a repeating task, so
+      // a stale value left behind after switching back to "none" is dropped.
+      repeatUntil:
+        data.recurrence !== "none" && data.repeatUntil
+          ? new Date(`${data.repeatUntil}T23:59:59.999`).toISOString()
+          : null,
       tags: normalizeTags(data.tagsText),
       // Anchor monthly recurrence to the user's local calendar day rather than
       // letting the server derive it from the UTC-serialized date.
@@ -251,7 +261,7 @@ export function AddTaskInlineModal({
         />
       </div>
 
-      <div className="flex flex-col sm:flex-row w-full justify-between gap-2">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap w-full justify-between gap-2">
         <FormField
           control={form.control}
           name="dueDate"
@@ -394,6 +404,26 @@ export function AddTaskInlineModal({
                   ))}
                 </SelectContent>
               </Select>
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="repeatUntil"
+          render={({ field }) => (
+            <FormItem
+              className={form.watch("recurrence") === "none" ? "hidden" : ""}
+            >
+              <FormControl>
+                <Input
+                  type="date"
+                  value={field.value ?? ""}
+                  onChange={field.onChange}
+                  className="min-w-[150px]"
+                  aria-label="Repeat until date (leave empty for no end)"
+                  title="Repeat until (optional)"
+                />
+              </FormControl>
             </FormItem>
           )}
         />

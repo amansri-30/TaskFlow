@@ -357,9 +357,11 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // every future occurrence. moveDueDate reads the OLD date, so the
         // assignment must happen inside it, not before.
         moveDueDate(task, nextDue);
-        // Re-anchor a monthly series on the snoozed date, otherwise the next
-        // completion spawns on the pre-snooze day-of-month.
-        setMonthlyDay(task, nextDue);
+        // A clamped occurrence is NOT a new anchor: Feb 28 for a Jan 31 series
+        // still means "the 31st", and re-anchoring on it made every later
+        // occurrence drift to the 28th permanently. Keep the stored anchor;
+        // only legacy rows without one fall back to the pre-snooze due date.
+        setMonthlyDay(task, scheduled, task.monthlyDay ?? undefined);
         task.updatedAt = new Date();
         await task.save();
         return handleRes(res, 200, true, "Task snoozed until the next occurrence", {

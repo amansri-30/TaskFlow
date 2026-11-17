@@ -48,6 +48,12 @@ function toLocalInputValue(date: Date): string {
   )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** Local calendar day only — re-picking the same day can change seconds. */
+function dayKey(date?: Date): string {
+  if (!date || isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
 export function EditTaskDialogContent({
   task,
   onSaved,
@@ -64,12 +70,17 @@ export function EditTaskDialogContent({
     task.recurrence || "none"
   );
   const [tagsText, setTagsText] = useState((task.tags || []).join(", "));
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(() => {
+  // Frozen at mount alongside the reminder so a save can tell "the user moved
+  // the due date" from "the user opened the dialog and edited an unrelated
+  // field". A clamped occurrence (Feb 28 for a Jan 31 series) must keep its
+  // original anchor when only the notes change.
+  const [initialDate] = useState<Date | undefined>(() => {
     const raw = task.scheduledAt ?? task.date;
     if (!raw) return undefined;
     const d = new Date(raw);
     return isNaN(d.getTime()) ? undefined : d;
   });
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(initialDate);
   // Frozen at mount so the save can tell "user edited the reminder" from
   // "user opened the dialog and hit save".
   const [initialRemindAt] = useState(() => {
@@ -135,6 +146,17 @@ export function EditTaskDialogContent({
       toast.error("Reminder must be in the future");
       return;
     }
+    // Only an actual day change re-anchors a monthly series. A clamped
+    // occurrence displays Feb 28 while the stored anchor is still the 31st;
+    // deriving the anchor from that display on every save silently drifted
+    // "pay rent on the 31st" to the 28th after an unrelated notes edit.
+    const dueDateChanged = dayKey(selectedDate) !== dayKey(initialDate);
+    const monthlyDayPayload =
+      recurrence === "monthly" && selectedDate
+        ? dueDateChanged
+          ? selectedDate.getDate()
+          : task.monthlyDay ?? selectedDate.getDate()
+        : undefined;
     setIsSaving(true);
     try {
       await axios.put(`/api/task/${task.id}`, {
@@ -154,10 +176,7 @@ export function EditTaskDialogContent({
             ? new Date(`${repeatUntil}T23:59:59.999`).toISOString()
             : null,
         tags: normalizeTags(tagsText),
-        monthlyDay:
-          recurrence === "monthly" && selectedDate
-            ? selectedDate.getDate()
-            : undefined,
+        monthlyDay: monthlyDayPayload,
         // Absent key = "leave the reminder alone"; only send it when the field
         // was actually edited, so opening the dialog can't clear a reminder.
         ...(remindAt !== initialRemindAt

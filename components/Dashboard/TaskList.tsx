@@ -264,6 +264,7 @@ export default function TaskList({
   const [tasks, setTasks] = useState<Task[]>(emptyTasks);
   const [trashed, setTrashed] = useState<Task[]>(emptyTasks);
   const [quickTitle, setQuickTitle] = useState("");
+  const quickInputRef = useRef<HTMLInputElement | null>(null);
   const [quickAdding, setQuickAdding] = useState(false);
   const [loading, setLoading] = useState<boolean>(true);
   // Only the first fetch may swap the page for the skeleton. Every later one
@@ -1041,12 +1042,38 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   const handleUndoRef = useRef<(() => void) | null>(null);
   undoStackRef.current = undoStack;
 
-  // Global quick-search palette (Cmd/Ctrl+K) and undo (Cmd/Ctrl+Z).
+  // Global shortcuts: quick capture (`a`), search palette (Cmd/Ctrl+K) and
+  // undo (Cmd/Ctrl+Z).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+        return;
+      }
+      // Plain `a` jumps to quick capture, the way a todo app's "add" key works.
+      // Guarded like undo so it never steals a character from a field or a
+      // Radix overlay; Trash has no capture box, so the ref is simply absent.
+      if (
+        e.key.toLowerCase() === "a" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        const target = e.target as HTMLElement | null;
+        const isTextField =
+          !!target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable);
+        const overlayOpen = !!document.querySelector(
+          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
+        );
+        if (isTextField || overlayOpen || !quickInputRef.current) return;
+        e.preventDefault();
+        quickInputRef.current.focus();
+        quickInputRef.current.scrollIntoView({ block: "nearest" });
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
@@ -3554,10 +3581,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
             className="flex items-center gap-2"
           >
             <Input
+              ref={quickInputRef}
               value={quickTitle}
               onChange={(e) => setQuickTitle(e.target.value)}
               placeholder={
-                'Add a task and press Enter  (try "Pay rent tomorrow at 6pm list:home #bills")'
+                'Add a task and press Enter  (press A anywhere to focus; try "Pay rent tomorrow at 6pm list:home #bills")'
               }
               aria-label="Quick add task"
               className="flex-1"

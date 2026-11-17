@@ -20,6 +20,7 @@ export type TaskStats = {
   noDueDate: number;
   /** Finished, non-trashed tasks — powers the Completed sidebar view. */
   completed: number;
+  pinned: number;
   tags: TagStat[];
   /**
    * Task count keyed by the exact stored list name, so the sidebar badge and
@@ -39,6 +40,7 @@ export function Dashboard() {
     overdue: 0,
     noDueDate: 0,
     completed: 0,
+    pinned: 0,
     tags: [],
     lists: {},
   });

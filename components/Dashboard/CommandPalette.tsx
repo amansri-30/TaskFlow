@@ -16,6 +16,7 @@ import { deferLabel } from "@/lib/dueDates";
 import { matchesFlag, SEARCH_FLAGS } from "@/lib/search";
 import { recurrenceLabel } from "@/lib/recurrence";
 import { parseQuickAdd } from "@/lib/quickParse";
+import { normalizeTags } from "@/lib/tags";
 
 const MAX_RESULTS = 20;
 
@@ -165,8 +166,13 @@ export default function CommandPalette({
               recurrenceLabel(createPreview.recurrence)
             }${createPreview.repeatUntil ? ` until ${deferLabel(createPreview.repeatUntil)}` : ""}`
           : "",
+        // The create row goes through `submitTaskFromText`, which normalizes
+        // tags (lowercase, spaces to dashes, punctuation stripped, five max).
+        // Showing the raw tokens here promised tags the saved task never had.
         createPreview.tags.length
-          ? createPreview.tags.map((t) => `#${t}`).join(" ")
+          ? normalizeTags(createPreview.tags)
+              .map((t) => `#${t}`)
+              .join(" ")
           : "",
       ]
         .filter(Boolean)

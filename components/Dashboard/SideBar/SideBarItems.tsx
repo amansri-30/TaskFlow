@@ -93,6 +93,8 @@ export const SideBarItems = ({
             ? stats.noDueDate
             : name === "Completed"
             ? stats.completed
+            : name === "Pinned"
+            ? stats.pinned
             : 0;
         return (
           <button

@@ -48,6 +48,7 @@ Undo2,
   X,
   Eye,
   EyeOff,
+  Keyboard,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter, formatDistanceToNow } from "date-fns";
 import {
@@ -278,6 +279,7 @@ export default function TaskList({
   const [edit, setEdit] = useState<boolean>(false);
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [confirmClear, setConfirmClear] = useState<boolean>(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sort, setSort] = useState<SortMode>("smart");
   const [groupByDue, setGroupByDue] = useState<boolean>(false);
   // View preference, persisted like grouping: long "All" lists drown the open
@@ -1076,6 +1078,24 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         quickInputRef.current.scrollIntoView({ block: "nearest" });
         return;
       }
+      // `?` opens the shortcut sheet. Shift is part of the key itself, so this
+      // cannot fire from ordinary typing in a field (guarded below anyway).
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const target = e.target as HTMLElement | null;
+        const isTextField =
+          !!target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable);
+        const overlayOpen = !!document.querySelector(
+          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
+        );
+        if (isTextField || overlayOpen) return;
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         // Never steal the browser's own text undo, and never fire from inside
         // an overlay: the search box, the subtask field and the palette input
@@ -1489,6 +1509,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
 
   const total = tasks.length;
   const completedCount = tasks.filter((t) => t.completed).length;
+  const pinnedCount = tasks.filter((t) => t.pinned).length;
   const pendingCount = total - completedCount;
   const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
 
@@ -1554,10 +1575,11 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       overdue: overdueCount,
       noDueDate: noDueDateCount,
       completed: completedCount,
+      pinned: pinnedCount,
       tags,
       lists: listCounts,
     });
-  }, [tasks, onStatsChange, completedCount]);
+  }, [tasks, onStatsChange, completedCount, pinnedCount]);
 
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
 
@@ -3094,8 +3116,19 @@ function deferAnchor(task: Task, dueIso: string | null) {
 
   const handleDuplicateTask = async (task: Task) => {
     try {
-      await axios.post("/api/newtask", duplicatePayload(task));
+      const response = await axios.post("/api/newtask", duplicatePayload(task));
       toast.success("Task duplicated");
+      // The copy has a brand-new id, so the original's undo entries cannot
+      // remove it. Batch duplicate already records this; a single duplicate is
+      // just as additive and deserves the same way back.
+      const createdId = response.data?.id;
+      if (typeof createdId === "string") {
+        pushUndo({
+          kind: "import",
+          label: "Undo duplicate",
+          ids: [createdId],
+        });
+      }
       await refreshSilently();
     } catch {
       toast.error("Failed to duplicate task");
@@ -3380,6 +3413,16 @@ function deferAnchor(task: Task, dueIso: string | null) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => setShortcutsOpen(true)}
+        aria-label="Keyboard shortcuts"
+        title="Keyboard shortcuts (?)"
+      >
+        <Keyboard className="mr-1.5 h-4 w-4" />
+        Shortcuts
+      </Button>
     </>
   );
 
@@ -4668,6 +4711,34 @@ function deferAnchor(task: Task, dueIso: string | null) {
           )}
         </>
       )}
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
+            <DialogDescription>
+              Work through the list without leaving the keyboard.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="space-y-2 text-sm">
+            {[
+              { keys: "A", label: "Focus quick add" },
+              { keys: "⌘ / Ctrl + K", label: "Open command palette" },
+              { keys: "⌘ / Ctrl + Z", label: "Undo last action" },
+              { keys: "?", label: "Show this help" },
+            ].map((shortcut) => (
+              <li
+                key={shortcut.keys}
+                className="flex items-center justify-between gap-4"
+              >
+                <span>{shortcut.label}</span>
+                <kbd className="shrink-0 rounded border bg-muted px-2 py-0.5 font-mono text-xs">
+                  {shortcut.keys}
+                </kbd>
+              </li>
+            ))}
+          </ul>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

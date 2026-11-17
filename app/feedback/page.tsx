@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Card,
   CardContent,
@@ -27,6 +27,27 @@ const Feedback = () => {
   const [alertShown, setAlertShown] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [hasError, setHasError] = useState(false);
+  // The feedback panel shares one dismiss timer across both outcomes. Without
+  // clearing the previous timer, a quick second submission could hide its new
+  // result when the first submission's 10-second timer expired.
+  const dismissTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current);
+    },
+    []
+  );
+
+  const showAlert = (error: boolean) => {
+    setHasError(error);
+    setAlertShown(true);
+    if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current);
+    dismissTimer.current = window.setTimeout(() => {
+      setAlertShown(false);
+      dismissTimer.current = null;
+    }, 10000);
+  };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -40,20 +61,17 @@ const Feedback = () => {
         email: email.trim(),
         message: feedback.trim(),
       });
-      setHasError(false);
       toast.success("Feedback submitted successfully");
       setEmail("");
       setFeedback("");
-      setAlertShown(true);
-      setTimeout(() => setAlertShown(false), 10000);
+      // Both outcomes use the same inline panel, so both need the same
+      // auto-dismiss treatment. Previously only success scheduled one and the
+      // error panel stayed on screen until a reload.
+      showAlert(false);
     } catch (error: any) {
       const message =
         error?.response?.data?.message || "Failed to submit feedback";
-      setHasError(true);
-      // The inline "Feedback Not Delivered" panel only keys off `alertShown`,
-      // which the success path set and this one never did -- so the error state
-      // was recorded and then rendered nowhere, leaving a toast that fades.
-      setAlertShown(true);
+      showAlert(true);
       toast.error(message);
     } finally {
       setSubmitting(false);

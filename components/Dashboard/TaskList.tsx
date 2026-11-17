@@ -116,6 +116,7 @@ const FILTERS = [
   { value: "today", label: "Today" },
   { value: "scheduled", label: "Scheduled" },
   { value: "overdue", label: "Overdue" },
+  { value: "done", label: "Completed" },
 ];
 
 type SortMode = "smart" | "priority" | "due" | "newest" | "title";
@@ -191,6 +192,17 @@ function previewDueLabel(date: Date): string {
 
 const GROUP_PREF_KEY = "taskflow:groupByDue";
 const HIDE_COMPLETED_PREF_KEY = "taskflow:hideCompleted";
+
+/**
+ * "Hide completed" is a background preference, not a lock: opening the
+ * Completed view or typing `is:done` is an explicit request to see finished
+ * work, so it wins. Kept as a helper (rather than reading the parsed search
+ * query) so the selection-pruning effect can use it without depending on a
+ * value computed later in the render.
+ */
+function wantsCompleted(filter: string, search: string): boolean {
+  return filter === "done" || /(?:^|\s)is:done(?:\s|$)/i.test(search);
+}
 
 /**
  * An undoable action, newest last. `edit` entries store a per-row PATCH body
@@ -1437,7 +1449,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // exempt: hide-completed does not apply there, and its rows keep their
   // `completed` flag, so pruning here used to erase a valid trash selection.
   useEffect(() => {
-    if (!hideCompleted || filter === "trash") return;
+    if (!hideCompleted || filter === "trash" || wantsCompleted(filter, search)) return;
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
       const completedIds = new Set(
@@ -1446,7 +1458,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       if (!Array.from(prev).some((id) => completedIds.has(id))) return prev;
       return new Set(Array.from(prev).filter((id) => !completedIds.has(id)));
     });
-  }, [hideCompleted, tasks, filter]);
+  }, [hideCompleted, tasks, filter, search]);
 
   const total = tasks.length;
   const completedCount = tasks.filter((t) => t.completed).length;
@@ -1514,10 +1526,11 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       next7: next7Count,
       overdue: overdueCount,
       noDueDate: noDueDateCount,
+      completed: completedCount,
       tags,
       lists: listCounts,
     });
-  }, [tasks, onStatsChange]);
+  }, [tasks, onStatsChange, completedCount]);
 
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
 
@@ -1542,6 +1555,10 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
 
   const matchesFilter = (t: Task) => {
     if (filter === "pinned") return !!t.pinned;
+    // Completed is its own smart view. The hide-completed override lives in the
+    // `filtered` derivation below; this only selects finished rows, so the view
+    // and its sidebar badge always agree.
+    if (filter === "done") return !!t.completed;
     if (filter === "today") {
       if (!t.scheduledAt) return false;
       const d = new Date(t.scheduledAt);
@@ -1656,10 +1673,12 @@ const matchesSearch = (t: Task) => {
 // "N shown" footer agree on what is actually on screen. Sidebar badges and the
 // overview deliberately keep counting the whole task set.
 const searchFiltered = tasks.filter((t) => matchesFilter(t) && matchesSearch(t));
-const filtered = hideCompleted
+const completedRequested = wantsCompleted(filter, search);
+const hideApplied = hideCompleted && !completedRequested;
+const filtered = hideApplied
   ? searchFiltered.filter((t) => !t.completed)
   : searchFiltered;
-const hiddenCompletedCount = hideCompleted
+const hiddenCompletedCount = hideApplied
   ? searchFiltered.reduce((count, t) => (t.completed ? count + 1 : count), 0)
   : 0;
 
@@ -2022,7 +2041,7 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
             : "Snoozed to next occurrence"
         );
       }
-    } catch {
+    } catch (err: any) {
       setTasks((prev) =>
         prev.map((t) =>
           t.id === task.id
@@ -2035,7 +2054,11 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
             : t
         )
       );
-      toast.error("Failed to snooze task");
+      // Surface the server's reason — e.g. a bounded series with no occurrence
+      // left to snooze to — instead of a generic failure the user cannot act on.
+      toast.error(
+        err?.response?.data?.message || err?.message || "Failed to snooze task"
+      );
     } finally {
       endOp(task.id);
     }

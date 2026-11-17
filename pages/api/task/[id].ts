@@ -337,6 +337,20 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         if (!nextDue) {
           return handleRes(res, 400, false, "Could not compute a next occurrence");
         }
+        // A bounded series must not be extended by snoozing. The completion
+        // branch already stops spawning once the next occurrence would pass
+        // `repeatUntil`, but snooze used to move the current occurrence past
+        // that end date — the task then kept repeating forever even though the
+        // end date said otherwise. Reject instead of silently extending.
+        const until = task.repeatUntil instanceof Date ? task.repeatUntil : null;
+        if (until && nextDue.getTime() > until.getTime()) {
+          return handleRes(
+            res,
+            400,
+            false,
+            `This series ends ${until.toISOString().slice(0, 10)}; there is no later occurrence to snooze to`
+          );
+        }
         // Snoozing moves the due date, so the reminder has to move with it.
         // Leaving it behind made the reminder fire immediately and, worse, left
         // an ~8-day gap that the recurrence lead-time logic then propagated to

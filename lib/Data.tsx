@@ -4,7 +4,14 @@ import Calendar03Icon from "@/public/svg/icons/Calendar03Icon";
 import TimeScheduleIcon from "@/public/svg/icons/TimeScheduleIcon";
 import PreferenceHorizontalIcon from "@/public/svg/icons/PreferenceHorizontalIcon";
 
-import { Trash2, Pin, CalendarRange, CalendarX, AlertCircle } from "lucide-react";
+import {
+  Trash2,
+  Pin,
+  CalendarRange,
+  CalendarX,
+  AlertCircle,
+  CheckCircle2,
+} from "lucide-react";
 
 import ProfileIcon from "@/public/svg/icons/ProfileIcon";
 import UserGroupIcon from "@/public/svg/icons/UserGroupIcon";
@@ -56,6 +63,11 @@ export const SideBarList = [
     name: "No due date",
     link: "/loggedin/inbox",
     icon: <CalendarX className="w-5 h-5" />,
+  },
+  {
+    name: "Completed",
+    link: "/loggedin/completed",
+    icon: <CheckCircle2 className="w-5 h-5" />,
   },
   {
     name: "Filter & Label",

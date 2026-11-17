@@ -21,6 +21,7 @@ const FILTER_BY_NAME: Record<string, string> = {
   Scheduled: "scheduled",
   "Next 7 days": "next7",
   "No due date": "nodate",
+  Completed: "done",
   "Filter & Label": "all",
   Trash: "trash",
   Pinned: "pinned",
@@ -90,6 +91,8 @@ export const SideBarItems = ({
             ? stats.next7
             : name === "No due date"
             ? stats.noDueDate
+            : name === "Completed"
+            ? stats.completed
             : 0;
         return (
           <button

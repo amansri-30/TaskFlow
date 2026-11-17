@@ -35,6 +35,7 @@ const NAV_VIEWS: { filter: string; label: string; keywords: string }[] = [
   { filter: "next7", label: "Go to Next 7 days", keywords: "next7 week seven days" },
   { filter: "overdue", label: "Go to Overdue", keywords: "overdue late behind" },
   { filter: "nodate", label: "Go to No due date", keywords: "nodate undated unscheduled" },
+  { filter: "done", label: "Go to Completed", keywords: "done completed finished closed" },
   { filter: "pinned", label: "Go to Pinned", keywords: "pinned star favorites" },
   { filter: "trash", label: "Go to Trash", keywords: "trash deleted bin recycle" },
 ];

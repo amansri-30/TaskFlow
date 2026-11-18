@@ -1078,6 +1078,46 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         quickInputRef.current.scrollIntoView({ block: "nearest" });
         return;
       }
+      // j/k walk the visible rows like a mail client. Focus lands on the row
+      // itself (not its first control), so the next keypress moves again and a
+      // screen reader still announces the whole row. The same field/overlay
+      // guard as `a` keeps typing in search, notes and dialogs untouched.
+      const navKey = e.key.toLowerCase();
+      if (
+        (navKey === "j" || navKey === "k") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        const target = e.target as HTMLElement | null;
+        const isTextField =
+          !!target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable);
+        const overlayOpen = !!document.querySelector(
+          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
+        );
+        if (isTextField || overlayOpen) return;
+        const rows = Array.from(
+          document.querySelectorAll<HTMLElement>("[data-task-row]")
+        );
+        if (rows.length === 0) return;
+        e.preventDefault();
+        const active = document.activeElement as HTMLElement | null;
+        const currentRow = active?.closest?.("[data-task-row]") as HTMLElement | null;
+        const current = currentRow ? rows.indexOf(currentRow) : -1;
+        const next =
+          navKey === "j"
+            ? Math.min(rows.length - 1, current + 1)
+            : current === -1
+            ? rows.length - 1
+            : Math.max(0, current - 1);
+        rows[next].focus();
+        rows[next].scrollIntoView({ block: "nearest" });
+        return;
+      }
       // `?` opens the shortcut sheet. Shift is part of the key itself, so this
       // cannot fire from ordinary typing in a field (guarded below anyway).
       if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -3566,7 +3606,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
               {trashedFiltered.map((task) => (
                 <div
                   key={task.id}
-                  className="flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group hover:bg-gray-100 dark:hover:bg-neutral-800"
+                  data-task-row={task.id}
+                  tabIndex={-1}
+                  className="flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group hover:bg-gray-100 dark:hover:bg-neutral-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-1"
                 >
                   <div className="flex items-center min-w-0 gap-2">
                     {edit && (
@@ -4721,6 +4763,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
           </DialogHeader>
           <ul className="space-y-2 text-sm">
             {[
+              { keys: "J / K", label: "Move between tasks" },
               { keys: "A", label: "Focus quick add" },
               { keys: "⌘ / Ctrl + K", label: "Open command palette" },
               { keys: "⌘ / Ctrl + Z", label: "Undo last action" },
@@ -4905,7 +4948,9 @@ function TaskItem({
   return (
     <>
     <div
-      className={`flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group ${
+      data-task-row={task.id}
+      tabIndex={-1}
+      className={`flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-1 ${
         selected
           ? "bg-emerald-50 dark:bg-emerald-950/40 ring-1 ring-emerald-300 dark:ring-emerald-800"
           : "hover:bg-gray-100 dark:hover:bg-neutral-800"

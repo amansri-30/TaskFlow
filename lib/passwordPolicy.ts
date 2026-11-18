@@ -26,7 +26,11 @@ export const passwordPolicyError = (password: unknown): string | null => {
   if (password.length < MIN_PASSWORD_LENGTH) {
     return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
   }
-  if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
+  // TextEncoder gives the same UTF-8 byte count as Buffer.byteLength and also
+  // exists in the browser, so the signup/reset forms can call this same policy
+  // before submitting instead of waiting for the server to reject an emoji-heavy
+  // password that is short in characters but long in bytes.
+  if (new TextEncoder().encode(password).length > MAX_PASSWORD_BYTES) {
     return `Password must be at most ${MAX_PASSWORD_BYTES} bytes (some characters count as more than one)`;
   }
   return null;

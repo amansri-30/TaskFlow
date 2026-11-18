@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Card,
   CardContent,
@@ -25,17 +25,36 @@ export default function SubscribeNewsletter() {
   const [alertShown, setAlertShown] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // One timer for the shared status panel. Two independent 10s timers meant a
+  // second submission could have its new success/error panel hidden by the
+  // first submission's timer still running.
+  const dismissTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current);
+    },
+    []
+  );
+
+  const showAlert = (error: boolean) => {
+    setHasError(error);
+    setAlertShown(true);
+    if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current);
+    dismissTimer.current = window.setTimeout(() => {
+      setAlertShown(false);
+      dismissTimer.current = null;
+    }, 10000);
+  };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setSubmitting(true);
     try {
       await axios.post("/api/subscribe", { email: email.trim() });
-      setHasError(false);
       toast.success("Subscription successful!");
       setEmail("");
-      setAlertShown(true);
-      setTimeout(() => setAlertShown(false), 10000);
+      showAlert(false);
     } catch (error: any) {
       const already = error?.response?.status === 409;
       toast.error(
@@ -43,9 +62,7 @@ export default function SubscribeNewsletter() {
           ? "You are already subscribed"
           : error?.response?.data?.message || "Subscription failed. Please try again."
       );
-      setHasError(true);
-      setAlertShown(true);
-      setTimeout(() => setAlertShown(false), 10000);
+      showAlert(true);
     } finally {
       setSubmitting(false);
     }

@@ -53,6 +53,13 @@ const resetPassword = catchAsyncError(
         $set: {
           password: await bcrypt.hash(password, 10),
           passwordChangedAt: new Date(),
+          // A password reset is proof of ownership too, so it ends any failed
+          // sign-in lockout just as a correct login does. Without this, a user
+          // who forgot their password after eight wrong guesses could reset it
+          // successfully and still get a 429 for the next hour.
+          loginAttempts: 0,
+          lockedUntil: null,
+          lockoutCount: 0,
         },
         // A real $unset, so the token cannot be replayed afterwards.
         $unset: { resetPasswordToken: 1, resetPasswordExpire: 1 },

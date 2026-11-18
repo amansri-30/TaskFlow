@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LockKeyhole } from "lucide-react";
+import { passwordPolicyError } from "@/lib/passwordPolicy";
 
 export default function ResetPassword() {
   const router = useRouter();
@@ -32,8 +33,11 @@ export default function ResetPassword() {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (password.length < 10) {
-      toast.error("Password must be at least 10 characters");
+    // Shared with the reset API and the signup form. `minLength={10}` alone
+    // misses byte-heavy passwords that bcrypt would silently truncate.
+    const policyError = passwordPolicyError(password);
+    if (policyError) {
+      toast.error(policyError);
       return;
     }
     if (password !== confirm) {

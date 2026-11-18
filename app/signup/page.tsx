@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { generatePassword } from "@/lib/GeneratePassword";
+import { passwordPolicyError } from "@/lib/passwordPolicy";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import SecurityPasswordIcon from "@/public/svg/icons/SecurityPasswordIcon";
 import PageTemplate from "@/components/elements/PageTemplate";
@@ -68,6 +69,14 @@ export default function SignUp() {
 
   const SignUpHandler = async (e: FormEvent) => {
     e.preventDefault();
+    // Same policy the register API enforces, checked here so an emoji-heavy
+    // password that is short in characters but over bcrypt's 72-byte limit is
+    // rejected inline instead of after a round trip.
+    const policyError = passwordPolicyError(password);
+    if (policyError) {
+      toast.error(policyError);
+      return;
+    }
     // Toast from the thunk result, not from a `state.user.error` effect. The
     // effect only re-runs when the string changes, so submitting twice with the
     // same failure (the common "email already registered" case) produced no

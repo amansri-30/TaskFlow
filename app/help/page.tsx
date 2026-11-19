@@ -94,7 +94,7 @@ export default function Help() {
             ) : (
               filteredFaqs.map((item, id) => (
                 <motion.div
-                  key={id}
+                  key={item.question}
                   initial={{ opacity: 0, y: -20 }}
                   animate={{
                     opacity: 1,
@@ -102,7 +102,13 @@ export default function Help() {
                     transition: { delay: id * 0.1 + 0.7, duration: 0.6 },
                   }}
                 >
-                  <AccordionItem key={id} value={`item-${id}`} className="">
+                  {/* Key the accordion value by the question, not its position in
+                      the filtered list: clearing a search must not silently move
+                      the open panel onto a different FAQ. */}
+                  <AccordionItem
+                    value={`faq-${item.question}`}
+                    className=""
+                  >
                     <motion.div
                       whileHover={{ scale: 1.03 }}
                       whileTap={{ scale: 0.98 }}

@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const protectedRoutes = ["/dashboard"];
-const authRoutes = ["/login", "/signup", "/forgot-password"];
+// `/forgot-password` is deliberately absent: a signed-in user may open it to
+// reset a password they no longer know, and the login form already hides its
+// own link from authenticated visitors.
+const authRoutes = ["/login", "/signup"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -32,5 +35,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/login", "/signup", "/forgot-password"],
+  matcher: ["/dashboard/:path*", "/login", "/signup"],
 };

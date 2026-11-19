@@ -65,9 +65,15 @@ const getQuote = catchAsyncError(async (req: NextApiRequest, res: NextApiRespons
   }
 
   // Only cache a real quote. Storing the empty string would suppress the
-  // upstream for an hour after a single malformed response.
-  if (quote) cached = { quote, expiresAt: Date.now() + CACHE_TTL_MS };
-  res.setHeader("Cache-Control", CACHE_HEADER);
+  // upstream for an hour after a single malformed response, and marking that
+  // empty 200 as public would make shared caches repeat the blank for an hour
+  // on the server's behalf.
+  if (quote) {
+    cached = { quote, expiresAt: Date.now() + CACHE_TTL_MS };
+    res.setHeader("Cache-Control", CACHE_HEADER);
+  } else {
+    res.setHeader("Cache-Control", "no-store");
+  }
   return handleRes(res, 200, true, "Quote fetched", { quote });
 });
 

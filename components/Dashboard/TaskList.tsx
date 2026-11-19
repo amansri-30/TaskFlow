@@ -1118,6 +1118,27 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         rows[next].scrollIntoView({ block: "nearest" });
         return;
       }
+      // Enter on a focused (not merely hovered) task opens its edit dialog.
+      // Restricted to the row itself so Enter on the checkbox, a menu item or
+      // any other control inside it keeps doing that control's own job.
+      if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const target = e.target as HTMLElement | null;
+        const currentRow = target?.closest?.("[data-task-row]") as HTMLElement | null;
+        if (
+          !currentRow ||
+          currentRow.dataset.taskRowKind !== "task" ||
+          target !== currentRow
+        ) {
+          return;
+        }
+        const editButton = currentRow.querySelector<HTMLButtonElement>(
+          'button[aria-label^="Edit "]'
+        );
+        if (!editButton) return;
+        e.preventDefault();
+        editButton.click();
+        return;
+      }
       // `?` opens the shortcut sheet. Shift is part of the key itself, so this
       // cannot fire from ordinary typing in a field (guarded below anyway).
       if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -3607,6 +3628,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
                 <div
                   key={task.id}
                   data-task-row={task.id}
+                  data-task-row-kind="trash"
                   tabIndex={-1}
                   className="flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group hover:bg-gray-100 dark:hover:bg-neutral-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-1"
                 >
@@ -4764,6 +4786,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
           <ul className="space-y-2 text-sm">
             {[
               { keys: "J / K", label: "Move between tasks" },
+              { keys: "Enter", label: "Edit focused task" },
               { keys: "A", label: "Focus quick add" },
               { keys: "⌘ / Ctrl + K", label: "Open command palette" },
               { keys: "⌘ / Ctrl + Z", label: "Undo last action" },
@@ -4949,6 +4972,7 @@ function TaskItem({
     <>
     <div
       data-task-row={task.id}
+      data-task-row-kind="task"
       tabIndex={-1}
       className={`flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-1 ${
         selected

@@ -114,6 +114,8 @@ TaskFlow/
    JWT_SECRET=<randomString>
    NEXT_PUBLIC_API_URL=
    QUOTES_API_KEY=<your-api-ninjas-key>
+   # Optional, only behind a proxy that overwrites client-supplied IP headers:
+   # TASKFLOW_TRUST_PROXY_HEADERS=1
    ```
 
 5. **Run the project in Development:**

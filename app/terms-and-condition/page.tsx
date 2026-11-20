@@ -5,9 +5,14 @@ import { Separator } from "@/components/ui/separator";
 import { termsAndConditionData } from "@/lib/Data";
 import { motion } from "framer-motion";
 
+type ListSectionContent = {
+  heading: string;
+  listItems: string[];
+};
+
 interface SectionProps {
   title: string;
-  content: string | string[];
+  content: string | string[] | ListSectionContent;
 }
 
 const containerVariants = {
@@ -32,7 +37,7 @@ export default function TermsAndCondition() {
     { title: "Introduction", content: termsAndConditionData.introduction },
     { title: "Acceptance of Terms", content: termsAndConditionData.acceptanceOfTerms },
     { title: "License to Use", content: termsAndConditionData.licenseToUse },
-    { title: "User Obligations", content: termsAndConditionData.userObligations.heading },
+    { title: "User Obligations", content: termsAndConditionData.userObligations },
     { title: "Limitation of Liability", content: termsAndConditionData.limitationOfLiability },
     { title: "Changes to These Terms", content: termsAndConditionData.changesToTheseTerms },
     { title: "Contact Information", content: termsAndConditionData.contactInformation },
@@ -70,6 +75,22 @@ export default function TermsAndCondition() {
                     </motion.li>
                   ))}
                 </ul>
+              ) : typeof section.content === "object" ? (
+                <>
+                  <motion.p
+                    className="text-base md:text-lg leading-relaxed mb-4 md:mb-6"
+                    variants={itemVariants}
+                  >
+                    {section.content.heading}
+                  </motion.p>
+                  <ul className="list-disc pl-6 space-y-2">
+                    {section.content.listItems.map((item, id) => (
+                      <motion.li key={id} variants={itemVariants}>
+                        {item}
+                      </motion.li>
+                    ))}
+                  </ul>
+                </>
               ) : (
                 <motion.p
                   className="text-base md:text-lg leading-relaxed mb-4 md:mb-6"

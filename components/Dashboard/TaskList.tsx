@@ -1042,7 +1042,15 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   // lands mid-update.
   const undoStackRef = useRef<UndoEntry[]>([]);
   const handleUndoRef = useRef<(() => void) | null>(null);
+  const tasksRef = useRef<Task[]>(tasks);
+  // Filled in once `handleToggleComplete` is declared below. The keydown
+  // listener is registered with an empty dependency list so a keystroke can't
+  // be dropped mid-render, so it reads current callbacks through refs.
+  const toggleCompleteRef = useRef<(task: Task, value: boolean) => void>(
+    () => {}
+  );
   undoStackRef.current = undoStack;
+  tasksRef.current = tasks;
 
   // Global shortcuts: quick capture (`a`), search palette (Cmd/Ctrl+K) and
   // undo (Cmd/Ctrl+Z).
@@ -1137,6 +1145,34 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         if (!editButton) return;
         e.preventDefault();
         editButton.click();
+        return;
+      }
+      // Space toggles the focused row's completion, the keyboard equivalent of
+      // clicking its checkbox. Held keys are ignored so one press cannot fire a
+      // burst of PATCHes, and the same row-only guard keeps Space working on
+      // buttons, checkboxes and dialogs instead of being swallowed here.
+      if (
+        e.key === " " &&
+        !e.repeat &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        const target = e.target as HTMLElement | null;
+        const currentRow = target?.closest?.("[data-task-row]") as HTMLElement | null;
+        if (
+          !currentRow ||
+          currentRow.dataset.taskRowKind !== "task" ||
+          target !== currentRow
+        ) {
+          return;
+        }
+        const task = tasksRef.current.find(
+          (t) => t.id === currentRow.dataset.taskRow
+        );
+        if (!task) return;
+        e.preventDefault();
+        toggleCompleteRef.current(task, !task.completed);
         return;
       }
       // `?` opens the shortcut sheet. Shift is part of the key itself, so this
@@ -2087,6 +2123,7 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
       endOp(task.id);
     }
   };
+  toggleCompleteRef.current = handleToggleComplete;
 
   const handleTogglePin = async (task: Task) => {
     if (!beginOp(task.id)) {
@@ -4787,6 +4824,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
             {[
               { keys: "J / K", label: "Move between tasks" },
               { keys: "Enter", label: "Edit focused task" },
+              { keys: "Space", label: "Complete / reopen focused task" },
               { keys: "A", label: "Focus quick add" },
               { keys: "⌘ / Ctrl + K", label: "Open command palette" },
               { keys: "⌘ / Ctrl + Z", label: "Undo last action" },

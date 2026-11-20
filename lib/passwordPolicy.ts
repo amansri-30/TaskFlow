@@ -23,7 +23,10 @@ export const passwordPolicyError = (password: unknown): string | null => {
   if (typeof password !== "string" || password.length === 0) {
     return "Password is required";
   }
-  if (password.length < MIN_PASSWORD_LENGTH) {
+  // `.length` counts UTF-16 units, so five emoji passed this ten-character rule.
+  // Count code points to match the policy's own definition of a character; the
+  // byte ceiling below still bounds the bcrypt input independently.
+  if (Array.from(password).length < MIN_PASSWORD_LENGTH) {
     return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
   }
   // TextEncoder gives the same UTF-8 byte count as Buffer.byteLength and also

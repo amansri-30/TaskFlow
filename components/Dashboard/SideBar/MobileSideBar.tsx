@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { useState } from "react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Bell, Flower, Menu } from "lucide-react";
 import { Button } from "../../ui/button";
@@ -29,9 +29,11 @@ export const MobileNav = ({
   onSelectFilter: (filter: string) => void;
   stats: TaskStats;
 }) => {
+  const [open, setOpen] = useState(false);
+
   return (
     <>
-      <Sheet>
+      <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
           <Button variant="outline" size="icon" className="shrink-0 md:hidden">
             <Menu className="h-5 w-5" />
@@ -52,7 +54,13 @@ export const MobileNav = ({
               SideBarList={SideBarList}
               listNames={listNames}
               activeFilter={activeFilter}
-              onSelectFilter={onSelectFilter}
+              // The sheet is a modal overlay. Leaving it open after a filter
+              // tap kept the list hidden behind it, so the user had to dismiss
+              // the menu a second time before seeing the view they selected.
+              onSelectFilter={(filter) => {
+                onSelectFilter(filter);
+                setOpen(false);
+              }}
               stats={stats}
             />
           </nav>

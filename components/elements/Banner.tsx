@@ -10,14 +10,17 @@ export default function Banner() {
       className={`relative bg-blue-600 px-3.5 py-2.5 sm:px-6 sm:py-3.5 flex flex-wrap gap-3 items-center justify-center`}
     >
       <p className="text-sm leading-6 text-white">
-        <strong className="font-semibold">Note:</strong> Visit newly developed
-        pages
+        <strong className="font-semibold">Note:</strong>{" "}
+        {bannerHistory[0].note}
       </p>
       <div className="flex flex-wrap items-center gap-4 sm:mt-0">
+        {/* The history is newest-first; `length - 1` picked the old "under
+            development" entry and sent this chip to the auth-gated Dashboard
+            instead of the newly published page it names. */}
         <LinkButton
-          href={bannerHistory[bannerHistory.length - 1].data[0].link}
-          name={bannerHistory[bannerHistory.length - 1].data[0].name}
-          icon={bannerHistory[bannerHistory.length - 1].data[0].icon}
+          href={bannerHistory[0].data[0].link}
+          name={bannerHistory[0].data[0].name}
+          icon={bannerHistory[0].data[0].icon}
         />
         {footerLinksData.map((item, index) => (
           <LinkButton

@@ -62,9 +62,13 @@ export default function LoginForm() {
       if (cancelled) return;
       setSessionChecked(true);
       if (getCurrentUser.rejected.match(result)) {
-        toast.error("Your session has expired. Please log in again.", {
-          duration: 4000,
-        });
+        const payload = result.payload as
+          | { message?: string; unauthenticated?: boolean }
+          | undefined;
+        toast.error(
+          payload?.message || "Could not verify your session. Please try again.",
+          { duration: 4000 }
+        );
       }
     });
     return () => {

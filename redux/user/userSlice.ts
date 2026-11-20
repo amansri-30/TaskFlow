@@ -11,6 +11,14 @@ type UserState = {
   user: User | null;
 };
 
+// Only a definitive 401/403 invalidates the httpOnly session cookie. A network
+// failure or a 500 says nothing about the session, so it must not log the user
+// out in Redux while the server still accepts the cookie.
+type SessionError = {
+  message: string;
+  unauthenticated: boolean;
+};
+
 const initialState: UserState = {
   error: null,
   message: null,
@@ -92,9 +100,15 @@ export const getCurrentUser = createAsyncThunk(
       });
       return response.data.user;
     } catch (error: any) {
-      return thunkAPI.rejectWithValue(
-        error?.response?.data?.message || "Session expired. Please log in."
-      );
+      const status = error?.response?.status;
+      return thunkAPI.rejectWithValue({
+        message:
+          error?.response?.data?.message ||
+          (status === 401 || status === 403
+            ? "Session expired. Please log in."
+            : "Could not verify your session. Please try again."),
+        unauthenticated: status === 401 || status === 403,
+      } satisfies SessionError);
     }
   }
 );
@@ -180,10 +194,16 @@ const userSlice = createSlice({
       )
       .addCase(getCurrentUser.rejected, (state, action) => {
         state.isLoading = false;
-        state.isAuthenticated = false;
+        const payload = action.payload as SessionError | undefined;
         state.error =
-          (action.payload as string) || "User not found. Please try logging in.";
-        state.user = null;
+          payload?.message || "User not found. Please try logging in.";
+        // A transient failure leaves the live cookie and the persisted user
+        // alone, so one dropped request cannot render a signed-in visitor as
+        // logged out until they manually sign in again.
+        if (payload?.unauthenticated) {
+          state.isAuthenticated = false;
+          state.user = null;
+        }
       });
   },
 });

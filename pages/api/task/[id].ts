@@ -375,6 +375,24 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         if (task.trashed) {
           return handleRes(res, 400, false, "Restore the task before rescheduling it");
         }
+        // A reschedule undo can carry the reminder that existed before the
+        // move. Validate it BEFORE touching any row: this check used to sit
+        // after the pending occurrences had been saved, so a corrupt value
+        // answered 400 while leaving the chain half-rescheduled and the client
+        // still showing the old parent date. Past instants are valid input and
+        // are dropped below, matching `moveDueDate`'s rule.
+        let undoReminder: Date | null | undefined;
+        if (remindAt !== undefined) {
+          if (!remindAt) {
+            undoReminder = null;
+          } else {
+            const explicit = new Date(remindAt);
+            if (isNaN(explicit.getTime())) {
+              return handleRes(res, 400, false, "Invalid reminder date");
+            }
+            undoReminder = explicit.getTime() > Date.now() ? explicit : null;
+          }
+        }
         // Looked up before the branch so BOTH arms can act on the chain. The
         // loop used to live only in the date arm, so clearing a completed
         // recurring parent's due date left its pending occurrence dated — the
@@ -433,16 +451,8 @@ const taskHandler = catchAsyncError(async (req: NextApiRequest, res: NextApiResp
         // supplied `remindAt` wins over the derived value. A recorded instant
         // that is already past by replay time is dropped, matching the rule
         // `moveDueDate` uses, instead of firing on the next poll.
-        if (remindAt !== undefined) {
-          if (remindAt) {
-            const explicit = new Date(remindAt);
-            if (isNaN(explicit.getTime())) {
-              return handleRes(res, 400, false, "Invalid reminder date");
-            }
-            task.remindAt = explicit.getTime() > Date.now() ? explicit : null;
-          } else {
-            task.remindAt = null;
-          }
+        if (undoReminder !== undefined) {
+          task.remindAt = undoReminder;
           task.remindedAt = null;
         }
         task.updatedAt = new Date();

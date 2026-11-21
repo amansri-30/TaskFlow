@@ -229,14 +229,32 @@ function parseRepeat(raw: string): Pick<CsvTaskSeed, "recurrence" | "repeatUntil
 
 function parseSubtaskDetails(raw: string): { text: string; completed: boolean }[] {
   if (!raw.trim()) return [];
-  return raw
-    .split("|")
-    .map((part) => {
-      const match = /^\s*\[([ xX])\]\s*(.*)$/.exec(part);
+  // Split on unescaped pipes and honour the exporter's `\\` / `\|` escapes.
+  // A plain split corrupted any subtask title containing a pipe.
+  const parts: string[] = [];
+  let current = "";
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    if (char === "\\" && (raw[i + 1] === "\\" || raw[i + 1] === "|")) {
+      current += raw[i + 1];
+      i++;
+    } else if (char === "|") {
+      parts.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+
+  return parts
+    .map((value) => {
+      const text = value.replace(/\\([\\|])/g, "$1").trim();
+      const match = /^\s*\[([ xX])\]\s*(.*)$/.exec(text);
       if (match) {
         return { completed: match[1].toLowerCase() === "x", text: match[2].trim() };
       }
-      return { completed: false, text: part.trim() };
+      return { completed: false, text };
     })
     .filter((item) => item.text.length > 0);
 }

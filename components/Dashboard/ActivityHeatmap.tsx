@@ -61,7 +61,10 @@ export function getStreaks(tasks: Task[]): { current: number; best: number } {
     if (run > best) best = run;
   }
 
-  return { current, best };
+  // The current streak has no 365-day cap, so a long-running one could exceed
+  // the trailing-window `best` and the legend would claim a best shorter than
+  // the streak shown in the header. The live run is an observed run too.
+  return { current, best: Math.max(best, current) };
 }
 
 function tone(level: number): string {

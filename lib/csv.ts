@@ -62,8 +62,16 @@ function subtasksCell(task: Task): string {
 }
 
 function subtaskDetailCell(task: Task): string {
+  // `|` separates subtasks in this cell, so it (and the escape itself) has to
+  // be escaped before export. Without this, a title like "Call Dan | pay
+  // invoice" imports back as two separate checklist items.
   return (task.subtasks || [])
-    .map((s) => `${s.completed ? "[x]" : "[ ]"} ${s.text}`)
+    .map(
+      (s) =>
+        `${s.completed ? "[x]" : "[ ]"} ${String(s.text)
+          .replace(/\\/g, "\\\\")
+          .replace(/\|/g, "\\|")}`
+    )
     .join(" | ");
 }
 

@@ -1049,6 +1049,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   const toggleCompleteRef = useRef<(task: Task, value: boolean) => void>(
     () => {}
   );
+  const togglePinRef = useRef<(task: Task) => void>(() => {});
   undoStackRef.current = undoStack;
   tasksRef.current = tasks;
 
@@ -1173,6 +1174,44 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
         if (!task) return;
         e.preventDefault();
         toggleCompleteRef.current(task, !task.completed);
+        return;
+      }
+      // P pins/unpins the focused row, completing the small set of actions a
+      // user can already reach from the keyboard after J/K navigation. The
+      // text-field and overlay guards keep it from stealing the letter while
+      // the user is typing a search or a task title.
+      if (
+        e.key.toLowerCase() === "p" &&
+        !e.repeat &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        const target = e.target as HTMLElement | null;
+        const isTextField =
+          !!target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.tagName === "SELECT" ||
+            target.isContentEditable);
+        const overlayOpen = !!document.querySelector(
+          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
+        );
+        if (isTextField || overlayOpen) return;
+        const currentRow = target?.closest?.("[data-task-row]") as HTMLElement | null;
+        if (
+          !currentRow ||
+          currentRow.dataset.taskRowKind !== "task" ||
+          target !== currentRow
+        ) {
+          return;
+        }
+        const task = tasksRef.current.find(
+          (t) => t.id === currentRow.dataset.taskRow
+        );
+        if (!task) return;
+        e.preventDefault();
+        togglePinRef.current(task);
         return;
       }
       // `?` opens the shortcut sheet. Shift is part of the key itself, so this
@@ -2148,6 +2187,7 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
       endOp(task.id);
     }
   };
+  togglePinRef.current = handleTogglePin;
 
   const handleSnooze = async (task: Task) => {
     if (!task.recurrence || task.recurrence === "none") return;
@@ -4825,6 +4865,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
               { keys: "J / K", label: "Move between tasks" },
               { keys: "Enter", label: "Edit focused task" },
               { keys: "Space", label: "Complete / reopen focused task" },
+              { keys: "P", label: "Pin / unpin focused task" },
               { keys: "A", label: "Focus quick add" },
               { keys: "⌘ / Ctrl + K", label: "Open command palette" },
               { keys: "⌘ / Ctrl + Z", label: "Undo last action" },

@@ -491,6 +491,15 @@ function parseDescription(raw: string): DescriptionParts {
       }
       continue;
     }
+    // A subtask title can contain a newline. The exporter escapes it as `\n`
+    // in the ICS TEXT value, so after unescaping it becomes a line that does
+    // not start with a checkbox marker. Append it to the current subtask
+    // instead of silently dropping the rest of the title.
+    if (mode === "subtasks" && line.trim() && subtasks.length > 0) {
+      const last = subtasks[subtasks.length - 1];
+      last.text = `${last.text}\n${line}`.trim().slice(0, 200);
+      continue;
+    }
 
     const notesMatch = /^Notes:\s?(.*)$/i.exec(line);
     if (!sawNotes && notesMatch) {

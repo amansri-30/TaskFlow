@@ -83,7 +83,7 @@ export function resolveDeferPreset(
     }
     case "next-week": {
       // The Monday of next week — the most common "push it a week" target.
-      const monday = addWeeks(startOfWeek(today, { weekStartsOn: 1 }), 7);
+      const monday = addWeeks(startOfWeek(today, { weekStartsOn: 1 }), 1);
       return guard(keepTime(monday));
     }
     case "two-weeks":

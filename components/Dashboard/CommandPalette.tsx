@@ -245,17 +245,17 @@ export default function CommandPalette({
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActiveIndex((i) => (i - 1 + Math.max(1, items.length)) % Math.max(1, items.length));
-    } else if (e.key === "Enter" && items[activeIndex]) {
-      e.preventDefault();
-      activate(items[activeIndex]);
-    } else if (e.key === "Tab" && items[activeIndex]) {
-      // The footer has always advertised "tab to open", but no Tab handler
-      // existed: focus just slid into the row's buttons and the highlighted
-      // task was never opened, so `openTask` had no keyboard path at all.
+    } else if (e.key === "Enter" && e.shiftKey && items[activeIndex]) {
+      // Shift+Enter opens the highlighted task. This used to be Tab, but
+      // swallowing Tab trapped focus in the combobox and could silently create
+      // a task or navigate when the highlighted row was the create/nav row.
       e.preventDefault();
       const item = items[activeIndex];
       if (item.kind === "task") openTask(item.task);
       else activate(item);
+    } else if (e.key === "Enter" && items[activeIndex]) {
+      e.preventDefault();
+      activate(items[activeIndex]);
     }
   };
 
@@ -455,7 +455,7 @@ export default function CommandPalette({
               <Pin className="h-3 w-3" /> pin
             </span>
             <span className="hidden items-center gap-1 sm:flex">
-              <ArrowRight className="h-3 w-3" /> tab to open
+              <ArrowRight className="h-3 w-3" /> shift+enter open
             </span>
           </span>
         </div>

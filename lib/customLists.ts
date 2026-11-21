@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { BUILT_IN_LIST_NAMES } from "./Data";
 
 const STORAGE_KEY = "taskflow:customLists";
 const MAX_LISTS = 20;
@@ -27,7 +28,11 @@ function read(): string[] {
     for (const name of cache) {
       if (typeof name !== "string") continue;
       const clean = name.trim().toLowerCase();
-      if (!clean || seen.has(clean)) continue;
+      // A custom list that reuses a built-in name renders as a duplicate sidebar
+      // row, and deleting it used to kick the user out of a still-valid list
+      // filter. The built-in row is the single source of truth for that name.
+      if (!clean || seen.has(clean) || BUILT_IN_LIST_NAMES.includes(clean))
+        continue;
       seen.add(clean);
       normalized.push(clean);
     }
@@ -74,7 +79,12 @@ export function addCustomList(name: string): {
 } {
   const trimmed = name.trim().toLowerCase();
   const current = read();
-  if (!trimmed || current.includes(trimmed) || current.length >= MAX_LISTS) {
+  if (
+    !trimmed ||
+    current.includes(trimmed) ||
+    BUILT_IN_LIST_NAMES.includes(trimmed) ||
+    current.length >= MAX_LISTS
+  ) {
     return { added: false, lists: current };
   }
   const next = [...current, trimmed];

@@ -3,8 +3,13 @@
 import React, { useEffect, useState } from "react";
 import { MobileNav } from "./SideBar/MobileSideBar";
 import type { TaskStats } from "./Dashboard";
-import { Search } from "lucide-react";
+import { Bookmark, BookmarkPlus, Search, X } from "lucide-react";
 import { Input } from "../ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +24,36 @@ import { logoutUser } from "@/redux/user/userSlice";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import GetQuotes from "@/middleware/getQuotes";
 import toast from "react-hot-toast";
+
+type SavedView = {
+  id: string;
+  label: string;
+  filter: string;
+  search: string;
+};
+
+const SAVED_VIEWS_KEY = "taskflow:saved-views";
+const MAX_VIEWS = 12;
+
+function loadSavedViews(): SavedView[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SAVED_VIEWS_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (view): view is SavedView =>
+          !!view &&
+          typeof view.id === "string" &&
+          typeof view.label === "string" &&
+          typeof view.filter === "string" &&
+          typeof view.search === "string"
+      )
+      .slice(0, MAX_VIEWS);
+  } catch {
+    return [];
+  }
+}
 
 export default function SearchAreaWithAvatarDropdown({
   activeFilter,
@@ -35,6 +70,8 @@ export default function SearchAreaWithAvatarDropdown({
 }) {
   const user = useAppSelector((state) => state.user.user?.name);
   const [quote, setQuote] = useState<string>("");
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [viewsLoaded, setViewsLoaded] = useState(false);
   const dispatch = useAppDispatch();
 
   const displayName = user?.trim() || "TaskFlow";
@@ -57,6 +94,47 @@ export default function SearchAreaWithAvatarDropdown({
 
     fetchQuote();
   }, []);
+
+  useEffect(() => {
+    setSavedViews(loadSavedViews());
+    setViewsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!viewsLoaded) return;
+    try {
+      window.localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(savedViews));
+    } catch {
+      toast.error("Could not save views in this browser");
+    }
+  }, [savedViews, viewsLoaded]);
+
+  const viewLabel =
+    search.trim() ||
+    (activeFilter === "all"
+      ? "All tasks"
+      : activeFilter.replace(/^[^:]+:\s*/, ""));
+
+  const handleSaveView = () => {
+    if (savedViews.some((view) => view.filter === activeFilter && view.search === search)) {
+      toast("This view is already saved");
+      return;
+    }
+    if (savedViews.length >= MAX_VIEWS) {
+      toast.error(`You can save up to ${MAX_VIEWS} views`);
+      return;
+    }
+    setSavedViews((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        label: viewLabel,
+        filter: activeFilter,
+        search,
+      },
+    ]);
+    toast.success("View saved");
+  };
 
   const handleLogout = async () => {
     // Navigate only after the server confirms it cleared the httpOnly cookie.
@@ -96,6 +174,71 @@ export default function SearchAreaWithAvatarDropdown({
               onChange={(e) => onSearchChange(e.target.value)}
               className="w-full appearance-none bg-background pl-8 shadow-none md:w-2/3 lg:w-1/3 ring-inset"
             />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-8 mt-1 shrink-0 gap-1 md:ml-2 md:mt-0"
+                  aria-label="Saved views"
+                >
+                  <Bookmark className="h-4 w-4" />
+                  <span className="hidden lg:inline">Views</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-72 p-2">
+                <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                  <p className="text-sm font-semibold">Saved views</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={handleSaveView}
+                  >
+                    <BookmarkPlus className="h-3 w-3" /> Save current
+                  </Button>
+                </div>
+                {savedViews.length === 0 ? (
+                  <p className="px-1 py-3 text-xs text-muted-foreground">
+                    Save the current filter and search to jump back here later.
+                  </p>
+                ) : (
+                  <ul className="space-y-1">
+                    {savedViews.map((view) => (
+                      <li
+                        key={view.id}
+                        className="flex items-center gap-1 rounded-md hover:bg-muted"
+                      >
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm"
+                          onClick={() => {
+                            onSearchChange(view.search);
+                            onSelectFilter(view.filter);
+                          }}
+                        >
+                          {view.label}
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Delete saved view ${view.label}`}
+                          className="rounded p-1.5 text-muted-foreground hover:text-foreground"
+                          onClick={() =>
+                            setSavedViews((prev) =>
+                              prev.filter((item) => item.id !== view.id)
+                            )
+                          }
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </PopoverContent>
+            </Popover>
             <h3 className="hidden md:block mx-auto font-semibold">
               {user ? `Welcome back, ${user}` : null}
             </h3>

@@ -1626,23 +1626,6 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       // Preference simply will not persist.
     }
   }, [hideCompleted]);
-  // Hiding completed rows is a view preference, not a data change. A completed
-  // row that disappears while checked must not stay in the batch selection:
-  // the toolbar would then retag or delete rows the user cannot see. Trash is
-  // exempt: hide-completed does not apply there, and its rows keep their
-  // `completed` flag, so pruning here used to erase a valid trash selection.
-  useEffect(() => {
-    if (!hideCompleted || filter === "trash" || wantsCompleted(filter, search)) return;
-    setSelectedIds((prev) => {
-      if (prev.size === 0) return prev;
-      const completedIds = new Set(
-        tasks.filter((t) => t.completed).map((t) => t.id)
-      );
-      if (!Array.from(prev).some((id) => completedIds.has(id))) return prev;
-      return new Set(Array.from(prev).filter((id) => !completedIds.has(id)));
-    });
-  }, [hideCompleted, tasks, filter, search]);
-
   const total = tasks.length;
   const completedCount = tasks.filter((t) => t.completed).length;
   const pinnedCount = tasks.filter((t) => t.pinned).length;
@@ -1868,6 +1851,31 @@ const hiddenCompletedCount = hideApplied
   : 0;
 
 const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : [];
+
+  // Selection is scoped to rows the current view actually shows. A batch action
+  // can make its own targets stop matching — reopening a row in Completed or
+  // moving it out of a `list:` view — without changing filter/search, so the
+  // reset above never fires. Left unchecked, the toolbar kept acting on rows
+  // the user could no longer see. The same rule covers hide-completed and
+  // trash, where the visible set is a different array.
+  const visibleSelectionKey = (trashView ? trashedFiltered : filtered)
+    .map((t) => t.id)
+    .join("|");
+  useEffect(() => {
+    const visible = new Set(
+      visibleSelectionKey ? visibleSelectionKey.split("|") : []
+    );
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      let changed = false;
+      Array.from(prev).forEach((id) => {
+        if (visible.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [visibleSelectionKey]);
 
   // Reminders that have come due and were never acknowledged. Normally the 30s
   // scan delivers a browser notification and stamps them server-side; when the
@@ -2717,14 +2725,16 @@ function deferAnchor(task: Task, dueIso: string | null) {
    *
    * Restoring a trashed task is the exception. It makes the row live again, so
    * a field undo recorded before it was trashed is still valid — pass
-   * `keepEdits` to drop only the delete/import entries that the restore itself
-   * already inverted.
+   * `keepEdits` to drop only the delete entries that the restore itself
+   * already inverted. An import undo is NOT inverted by a restore (the row is
+   * still an imported row), so it must survive untouched.
    */
   const forgetUndoFor = (ids: string[], keepEdits = false) => {
     const gone = new Set(ids);
     setUndoStack((prev) =>
       prev
         .map((entry) => {
+          if (entry.kind === "import" && keepEdits) return entry;
           if (entry.kind === "delete" || entry.kind === "import") {
             const kept = entry.ids.filter((id) => !gone.has(id));
             if (kept.length === entry.ids.length) return entry;
@@ -2761,8 +2771,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
    *
    * Replay is field-scoped by construction — `edit` entries carry one PATCH body
    * per row — so a concurrent pin or subtask tick on the same task survives. A
-   * partial failure keeps the whole stack and refetches, since the rows that
-   * failed are still the user's to retry.
+   * partial failure keeps the failed subset as a shorter undo entry and
+   * refetches, since the rows that succeeded must not be reverted a second time
+   * but the rows that failed are still the user's to retry.
    */
   const handleUndo = async (index?: number) => {
     if (undoBusy || undoStack.length === 0) return;
@@ -2835,11 +2846,52 @@ function deferAnchor(task: Task, dueIso: string | null) {
             })
       );
       const ok = results.filter((r) => r.status === "fulfilled").length;
-      // Consumed either way: the rows that succeeded are already reverted, so
-      // leaving the entry would offer to replay it and revert them a second
-      // time. A failure is reported rather than hidden, and the refetch below
-      // shows the true state.
-      setUndoStack(dropConsumed);
+      if (ok === total) {
+        // Fully consumed: replaying again would revert the same rows twice.
+        setUndoStack(dropConsumed);
+      } else {
+        // Keep only the rows that failed. Dropping the whole entry here used to
+        // strand them with no retry path even though the toast promised the
+        // user could try again; replaying the whole entry would double-revert
+        // the rows that did succeed.
+        const failed = new Set(
+          results
+            .map((result, i) => (result.status === "rejected" ? i : -1))
+            .filter((i) => i >= 0)
+        );
+        setUndoStack((prev) => {
+          const idx = prev.indexOf(entry);
+          if (idx === -1) return prev;
+          const remaining: UndoEntry | null =
+            entry.kind === "edit"
+              ? entry.prev.filter((_, i) => failed.has(i)).length
+                ? {
+                    ...entry,
+                    prev: entry.prev.filter((_, i) => failed.has(i)),
+                  }
+                : null
+              : entry.ids.filter((_, i) => failed.has(i)).length
+              ? {
+                  ...entry,
+                  ids: entry.ids.filter((_, i) => failed.has(i)),
+                  label:
+                    entry.kind === "import"
+                      ? `Undo import (${plural(
+                          entry.ids.filter((_, i) => failed.has(i)).length,
+                          "task"
+                        )})`
+                      : `Undo delete (${plural(
+                          entry.ids.filter((_, i) => failed.has(i)).length,
+                          "task"
+                        )})`,
+                }
+              : null;
+          const next = prev.slice();
+          if (remaining) next[idx] = remaining;
+          else next.splice(idx, 1);
+          return next;
+        });
+      }
       if (ok < total) {
         toast.error(
           `Undid ${ok} of ${total} — ${total - ok} could not be reverted`

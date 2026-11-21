@@ -24,6 +24,8 @@ export default function NotificationButton() {
   // popover that already had alerts in it, so the panel flickered every time
   // the user looked at it. Only the first fetch has nothing to show.
   const loadedRef = useRef(false);
+  const [overdueExpanded, setOverdueExpanded] = useState(false);
+  const [dueTodayExpanded, setDueTodayExpanded] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -82,9 +84,6 @@ export default function NotificationButton() {
   });
 
   const alertCount = dueToday.length + overdue.length;
-  const shownOverdue = overdue.slice(0, MAX_SHOWN).length;
-  const shownDueToday = dueToday.slice(0, MAX_SHOWN).length;
-  const hidden = alertCount - (shownOverdue + shownDueToday);
 
   const renderItem = (t: Task, isOverdue: boolean) => (
     <li
@@ -155,8 +154,21 @@ export default function NotificationButton() {
                   Overdue ({overdue.length})
                 </p>
                 <ul>
-                  {overdue.slice(0, MAX_SHOWN).map((t) => renderItem(t, true))}
+                  {(overdueExpanded ? overdue : overdue.slice(0, MAX_SHOWN)).map(
+                    (t) => renderItem(t, true)
+                  )}
                 </ul>
+                {overdue.length > MAX_SHOWN && (
+                  <button
+                    type="button"
+                    onClick={() => setOverdueExpanded((value) => !value)}
+                    className="px-2 py-1 text-xs font-medium text-red-600 hover:underline"
+                  >
+                    {overdueExpanded
+                      ? "Show fewer overdue"
+                      : `Show ${overdue.length - MAX_SHOWN} more overdue`}
+                  </button>
+                )}
               </>
             )}
             {dueToday.length > 0 && (
@@ -165,15 +177,23 @@ export default function NotificationButton() {
                   Due today ({dueToday.length})
                 </p>
                 <ul>
-                  {dueToday.slice(0, MAX_SHOWN).map((t) => renderItem(t, false))}
+                  {(dueTodayExpanded ? dueToday : dueToday.slice(0, MAX_SHOWN)).map(
+                    (t) => renderItem(t, false)
+                  )}
                 </ul>
+                {dueToday.length > MAX_SHOWN && (
+                  <button
+                    type="button"
+                    onClick={() => setDueTodayExpanded((value) => !value)}
+                    className="px-2 py-1 text-xs font-medium text-amber-600 hover:underline"
+                  >
+                    {dueTodayExpanded
+                      ? "Show fewer due today"
+                      : `Show ${dueToday.length - MAX_SHOWN} more due today`}
+                  </button>
+                )}
               </>
             )}
-            {hidden > 0 && (
-                <p className="px-2 pt-2 text-xs text-muted-foreground">
-                  +{hidden} more
-                </p>
-              )}
           </div>
         )}
       </PopoverContent>

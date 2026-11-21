@@ -121,6 +121,11 @@ export const listNames = [
   },
 ];
 
+// The built-in list names are also the vocabulary of `list:` filters. Custom
+// lists must never reuse one, or the sidebar renders two identical rows and the
+// delete control for the duplicate kicks the user out of a still-valid view.
+export const BUILT_IN_LIST_NAMES = listNames.map((item) => item.name);
+
 // ------------------------------------------------------------------------------------------------
 
 export const tasks = [

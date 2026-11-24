@@ -1,7 +1,8 @@
 import {
+  addDays,
   differenceInCalendarDays,
-  isWeekend,
   startOfDay,
+  startOfWeek,
 } from "date-fns";
 import type { Task } from "@/types";
 
@@ -47,6 +48,7 @@ export const DUE_BUCKET_LABELS: Record<DueBucket, string> = {
  */
 export const NEXT_7_DAYS = 7;
 const NEXT_7_DAYS_LAST_INDEX = NEXT_7_DAYS - 1;
+const SATURDAY_OFFSET = 5;
 
 /**
  * The due date as a Date, or null when it is missing or unparseable. The two
@@ -55,6 +57,20 @@ const NEXT_7_DAYS_LAST_INDEX = NEXT_7_DAYS - 1;
  */
 export const dueDateOf = (t: Pick<Task, "scheduledAt">): Date | null => {
   if (!t.scheduledAt) return null;
+  // `new Date("2026-11-23")` is UTC midnight, which is still Nov 22 in the
+  // Americas. Exports and imports use date-only values for tasks that mean a
+  // local calendar day, so parse that shape in local time before bucketing.
+  if (typeof t.scheduledAt === "string") {
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t.scheduledAt);
+    if (dateOnly) {
+      const d = new Date(
+        Number(dateOnly[1]),
+        Number(dateOnly[2]) - 1,
+        Number(dateOnly[3])
+      );
+      return isNaN(d.getTime()) ? null : d;
+    }
+  }
   const d = new Date(t.scheduledAt);
   return isNaN(d.getTime()) ? null : d;
 };
@@ -90,11 +106,19 @@ export const dueBucket = (
   if (diff < 0) return "overdue";
   if (diff === 0) return "today";
   if (diff === 1) return "tomorrow";
-  // A weekend day inside the coming week reads better as its own group than as
-  // an anonymous Wednesday, but a weekend far out stays in Later — otherwise
-  // grouping would scatter a distant Sat/Sun above every nearer weekday.
-  if (isWeekend(due) && diff <= NEXT_7_DAYS_LAST_INDEX) return "weekend";
-  if (diff <= NEXT_7_DAYS_LAST_INDEX) return "week";
+  // "This weekend" is Saturday/Sunday of the current Monday-start week, not
+  // any weekend inside the next seven days. On Sunday, next Saturday is seven
+  // days away and belongs in Later, not above the current week's work.
+  const weekStart = startOfWeek(now, { weekStartsOn: 1 });
+  const weekendStart = addDays(weekStart, SATURDAY_OFFSET);
+  const weekendEnd = addDays(weekendStart, 2);
+  const dueDay = startOfDay(due);
+  if (dueDay >= weekendStart && dueDay < weekendEnd) return "weekend";
+  // "Later this week" stops at Sunday of the current Monday-start week. Using
+  // the rolling seven-day window here put next Monday under a heading that
+  // plainly says this week.
+  const endOfThisWeek = addDays(weekStart, NEXT_7_DAYS_LAST_INDEX);
+  if (dueDay <= endOfThisWeek) return "week";
   return "later";
 };
 

@@ -10,17 +10,6 @@ const feedbackHandler = catchAsyncError(
     if (req.method !== "POST")
       return handleRes(res, 405, false, "Only POST requests are allowed");
 
-    // Unauthenticated write with validation but no volume cap: bound it at the
-    // edge of the handler so a scripted loop cannot fill the collection.
-    if (!rateLimit(`feedback:${clientKey(req)}`, 5, 10 * 60_000)) {
-      return handleRes(
-        res,
-        429,
-        false,
-        "Too many submissions. Please try again in a few minutes."
-      );
-    }
-
     const { email, message } = req.body || {};
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!email || typeof email !== "string" || !EMAIL_RE.test(email.trim())) {
@@ -39,6 +28,18 @@ const feedbackHandler = catchAsyncError(
     // anything close to that.
     if (message.length > 2000) {
       return handleRes(res, 400, false, "Feedback message is too long (max 2000 characters)");
+    }
+
+    // Unauthenticated write with validation but no volume cap: bound it at the
+    // edge of the handler so a scripted loop cannot fill the collection. Count
+    // only valid submissions, otherwise five typos would block a real report.
+    if (!rateLimit(`feedback:${clientKey(req)}`, 5, 10 * 60_000)) {
+      return handleRes(
+        res,
+        429,
+        false,
+        "Too many submissions. Please try again in a few minutes."
+      );
     }
 
     await connectDB();

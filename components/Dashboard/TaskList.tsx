@@ -49,6 +49,7 @@ Undo2,
   Eye,
   EyeOff,
   Keyboard,
+  BookmarkPlus,
 } from "lucide-react";
 import { isSameDay, startOfDay, isBefore, addDays, isAfter, formatDistanceToNow } from "date-fns";
 import {
@@ -75,6 +76,12 @@ import {
   type ReminderPresetId,
 } from "@/lib/reminders";
 import { normalizeTags } from "@/lib/tags";
+import {
+  createPayloadFromTemplate,
+  saveTaskTemplate,
+  templateFromTask,
+  type TaskTemplate,
+} from "@/lib/taskTemplates";
 import {
   groupTasksByDue,
   groupLabel,
@@ -189,6 +196,17 @@ function previewDueLabel(date: Date): string {
     minute: "2-digit",
   });
   return `${day} · ${time}`;
+}
+
+/** Local wall-clock value for `<input type="datetime-local">`. */
+function toLocalDateTimeInput(raw?: string | null): string {
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 const GROUP_PREF_KEY = "taskflow:groupByDue";
@@ -1586,6 +1604,20 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     } catch (err: any) {
       const message =
         err?.response?.data?.message || err?.message || "Failed to add task";
+      toast.error(message);
+    }
+  };
+
+  // Saved templates go through the ordinary create endpoint; only the payload
+  // is pre-filled, so every validation rule and response contract stays shared.
+  const handleCreateFromTemplate = async (template: TaskTemplate) => {
+    try {
+      await axios.post("/api/newtask", createPayloadFromTemplate(template));
+      toast.success(`Created “${template.name}”`);
+      refresh();
+    } catch (err: any) {
+      const message =
+        err?.response?.data?.message || err?.message || "Failed to create from template";
       toast.error(message);
     }
   };
@@ -3634,6 +3666,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
         onNavigate={onFilterChange}
         onSearch={onSearchChange}
         onCreateTask={handlePaletteCreate}
+        onCreateFromTemplate={handleCreateFromTemplate}
       />
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-lg font-semibold md:text-2xl">{heading}</h1>
@@ -5030,7 +5063,13 @@ function TaskItem({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
   const [reminderOpen, setReminderOpen] = useState(false);
+  const [customReminder, setCustomReminder] = useState(() =>
+    toLocalDateTimeInput(task.remindAt)
+  );
   const [deferPickerOpen, setDeferPickerOpen] = useState(false);
   const [newSubtask, setNewSubtask] = useState("");
   const isRecurring = !!task.recurrence && task.recurrence !== "none";
@@ -5051,6 +5090,21 @@ function TaskItem({
     if (!when) return;
     if (when.getTime() <= Date.now()) {
       // Never silently drop a preset: the user is told why and picks another.
+      toast.error("That reminder time is already in the past");
+      return;
+    }
+    onSetReminder(task, when.toISOString());
+    setReminderOpen(false);
+  };
+
+  const applyCustomReminder = () => {
+    if (!customReminder) return;
+    const when = resolveReminderAt("custom", null, customReminder);
+    if (!when) {
+      toast.error("Choose a valid reminder date and time");
+      return;
+    }
+    if (when.getTime() <= Date.now()) {
       toast.error("That reminder time is already in the past");
       return;
     }
@@ -5323,13 +5377,81 @@ function TaskItem({
         {task.recurrence && task.recurrence !== "none" && (
           <RecurrenceLabel recurrence={task.recurrence} repeatUntil={task.repeatUntil} />
         )}
-        <Dialog>
+        <Dialog open={editOpen} onOpenChange={setEditOpen}>
           <DialogTrigger asChild>
             <button aria-label={`Edit ${task.title}`} className="p-1 hover:bg-muted rounded">
               <PencilEdit02Icon className="h-4 w-4" />
             </button>
           </DialogTrigger>
-          <EditTaskDialogContent task={task} onSaved={onRefresh} />
+          <EditTaskDialogContent
+            task={task}
+            onSaved={() => {
+              // The refresh swaps in a new task object, but the dialog's form
+              // state is initialized once at mount. Closing on success prevents
+              // a second save from replaying the original snapshot.
+              setEditOpen(false);
+              onRefresh();
+            }}
+          />
+        </Dialog>
+        <Dialog
+          open={templateOpen}
+          onOpenChange={(open) => {
+            if (open) setTemplateName(task.title.slice(0, 60));
+            setTemplateOpen(open);
+          }}
+        >
+          <DialogTrigger asChild>
+            <button
+              aria-label={`Save ${task.title} as template`}
+              title="Save as reusable template"
+              className="p-1 hover:bg-muted rounded"
+            >
+              <BookmarkPlus className="h-4 w-4" />
+            </button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Save as a template</DialogTitle>
+              <DialogDescription>
+                Stores the title, list, tags, subtasks and repeat cadence. Due and
+                reminder times are saved relative to today, so reuse always
+                schedules a fresh copy.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <label htmlFor={`template-name-${task.id}`} className="text-sm font-medium">
+                Template name
+              </label>
+              <Input
+                id={`template-name-${task.id}`}
+                value={templateName}
+                maxLength={60}
+                onChange={(e) => setTemplateName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || !templateName.trim()) return;
+                  saveTaskTemplate(templateFromTask(task, templateName));
+                  toast.success("Template saved — type tpl: in the command palette to use it");
+                  setTemplateOpen(false);
+                }}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setTemplateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!templateName.trim()}
+                onClick={() => {
+                  saveTaskTemplate(templateFromTask(task, templateName));
+                  toast.success("Template saved — type tpl: in the command palette to use it");
+                  setTemplateOpen(false);
+                }}
+              >
+                Save template
+              </Button>
+            </DialogFooter>
+          </DialogContent>
         </Dialog>
         <Dialog open={reminderOpen} onOpenChange={setReminderOpen}>
           <DialogTrigger asChild>
@@ -5345,6 +5467,9 @@ function TaskItem({
                   // Ask on the first deliberate click, not on page load.
                   onEnableReminders();
                 }
+                // The task may have been edited since this row mounted; start
+                // from its current reminder instead of the mount-time draft.
+                setCustomReminder(toLocalDateTimeInput(task.remindAt));
                 setReminderOpen(true);
               }}
               className={`p-1 rounded ${
@@ -5397,19 +5522,18 @@ function TaskItem({
                 <input
                   id={`reminder-custom-${task.id}`}
                   type="datetime-local"
-                  onChange={(e) => {
-                    if (!e.target.value) return;
-                    const when = resolveReminderAt("custom", null, e.target.value);
-                    if (!when) return;
-                    if (when.getTime() <= Date.now()) {
-                      toast.error("That reminder time is already in the past");
-                      return;
-                    }
-                    onSetReminder(task, when.toISOString());
-                    setReminderOpen(false);
-                  }}
+                  value={customReminder}
+                  onChange={(e) => setCustomReminder(e.target.value)}
                   className="flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                 />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={applyCustomReminder}
+                  disabled={!customReminder}
+                >
+                  Set
+                </Button>
               </div>
             </div>
           </DialogContent>

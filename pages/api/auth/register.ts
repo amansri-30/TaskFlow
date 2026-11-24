@@ -14,13 +14,6 @@ const registerUser = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST") return handleRes(res, 405, false, "Only POST request is allowed");
 
-    // Registration answers "Email already registered" (standard UX), which is
-    // also an existence oracle; capping attempts per source keeps it from being
-    // turned into a bulk email-harvesting tool.
-    if (!rateLimit(`register:${clientKey(req)}`, 10, 15 * 60_000)) {
-      return handleRes(res, 429, false, "Too many attempts. Please try again later");
-    }
-
     const { name, email, password } = req.body || {};
     if (!name || !email || !password) return handleRes(res, 400, false, "All fields required!");
     // Validate the plaintext password BEFORE hashing. The schema's minLength
@@ -49,6 +42,14 @@ const registerUser = catchAsyncError(
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
     ) {
       return handleRes(res, 400, false, "Enter a valid email address");
+    }
+
+    // Registration answers "Email already registered" (standard UX), which is
+    // also an existence oracle; capping attempts per source keeps it from being
+    // turned into a bulk email-harvesting tool. Count only well-formed attempts
+    // so a few validation errors cannot burn a legitimate user's budget.
+    if (!rateLimit(`register:${clientKey(req)}`, 10, 15 * 60_000)) {
+      return handleRes(res, 429, false, "Too many attempts. Please try again later");
     }
 
     await connectDB();

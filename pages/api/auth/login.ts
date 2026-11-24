@@ -34,13 +34,6 @@ const logIn = catchAsyncError(
   async (req: NextApiRequest, res: NextApiResponse) => {
     if (req.method !== "POST") return handleRes(res, 405, false, "Only post request is allowed");
 
-    // Per-account lockout bounds guesses against one address, but an attacker
-    // can rotate addresses freely from a single host. This caps the source:
-    // generous enough for a shared office/NAT IP, far below spray volume.
-    if (!rateLimit(`login:${clientKey(req)}`, 30, 15 * 60_000)) {
-      return handleRes(res, 429, false, "Too many attempts. Please try again later");
-    }
-
     const {email, password} = req.body || {};
     // Type-check, not just truthiness: `bcrypt.compare` rejects a non-string
     // with "data and hash must be strings", and that error matches nothing in
@@ -48,6 +41,15 @@ const logIn = catchAsyncError(
     // instead of the 400 this input deserves.
     if (typeof email !== "string" || typeof password !== "string" || !email || !password)
       return handleRes(res, 400, false, "All fields required!!!");
+
+    // Per-account lockout bounds guesses against one address, but an attacker
+    // can rotate addresses freely from a single host. This caps the source:
+    // generous enough for a shared office/NAT IP, far below spray volume. It
+    // runs after validation so malformed requests cannot exhaust a real
+    // user's allowance on the same shared IP.
+    if (!rateLimit(`login:${clientKey(req)}`, 30, 15 * 60_000)) {
+      return handleRes(res, 429, false, "Too many attempts. Please try again later");
+    }
 
     // Look up with the same normalization used at registration so a user who
     // signed up with mixed-case email can always log in.

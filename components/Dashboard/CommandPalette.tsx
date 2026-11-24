@@ -9,7 +9,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Pin, CornerDownLeft, Check, CheckCheck, ArrowRight, Plus } from "lucide-react";
+import {
+  Pin,
+  CornerDownLeft,
+  Check,
+  CheckCheck,
+  ArrowRight,
+  Plus,
+  Bookmark,
+  X,
+} from "lucide-react";
 import { Task } from "@/types";
 import { reminderLabel } from "@/lib/reminders";
 import { deferLabel } from "@/lib/dueDates";
@@ -17,12 +26,19 @@ import { matchesFlag, SEARCH_FLAGS } from "@/lib/search";
 import { recurrenceLabel } from "@/lib/recurrence";
 import { parseQuickAdd } from "@/lib/quickParse";
 import { normalizeTags } from "@/lib/tags";
+import {
+  deleteTaskTemplate,
+  loadTaskTemplates,
+  templateMeta,
+  type TaskTemplate,
+} from "@/lib/taskTemplates";
 
 const MAX_RESULTS = 20;
 
 type PaletteItem =
   | { kind: "create" }
   | { kind: "task"; task: Task }
+  | { kind: "template"; template: TaskTemplate }
   | { kind: "nav"; filter: string; label: string };
 
 // Smart views the sidebar can jump to. `keywords` carries the synonyms a user
@@ -50,6 +66,7 @@ type CommandPaletteProps = {
   onNavigate: (filter: string) => void;
   onSearch: (term: string) => void;
   onCreateTask: (text: string) => void;
+  onCreateFromTemplate: (template: TaskTemplate) => void;
 };
 
 function taskMeta(t: Task): string {
@@ -82,16 +99,28 @@ export default function CommandPalette({
   onNavigate,
   onSearch,
   onCreateTask,
+  onCreateFromTemplate,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
+
+  // `tpl:` is an explicit mode: it keeps templates out of ordinary task search
+  // while making them discoverable from the placeholder and footer hint.
+  const templateQueryMatch = /^(?:tpl|template):(.*)$/i.exec(query.trim());
+  const templateQuery = templateQueryMatch
+    ? templateQueryMatch[1].trim().toLowerCase()
+    : null;
 
   useEffect(() => {
     if (open) {
       setQuery("");
       setActiveIndex(0);
+      // Reload on every open so a template just saved from a task row is usable
+      // without a page refresh.
+      setTemplates(loadTaskTemplates());
       const t = setTimeout(() => inputRef.current?.focus(), 50);
       return () => clearTimeout(t);
     }
@@ -99,6 +128,8 @@ export default function CommandPalette({
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
+    // In template mode the palette is a template launcher, not a task search.
+    if (templateQuery !== null) return [];
     if (!q) {
       return [...tasks].sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false)).slice(0, MAX_RESULTS);
     }
@@ -144,7 +175,7 @@ export default function CommandPalette({
         return true;
       })
       .slice(0, MAX_RESULTS);
-  }, [tasks, query]);
+  }, [tasks, query, templateQuery]);
 
   // Anything non-empty can become a task. Parse it with the same grammar the
   // quick-add box uses so the preview ("due Fri", "#home") matches what will
@@ -155,7 +186,8 @@ export default function CommandPalette({
     [trimmedQuery]
   );
   const createTitle = createPreview?.title.trim() ?? "";
-  const showCreate = createTitle.length > 0;
+  // A `tpl:` query should never create a task literally named "tpl:review".
+  const showCreate = createTitle.length > 0 && templateQuery === null;
   const createMeta = createPreview
     ? [
         createPreview.dueDate ? deferLabel(createPreview.dueDate) : "",
@@ -185,13 +217,24 @@ export default function CommandPalette({
   // matching still defaults to creating a task named "trash", and a view jump
   // is one ↓ away.
   const navRows = useMemo<PaletteItem[]>(() => {
-    if (!trimmedQuery || results.length > 0) return [];
+    if (templateQuery !== null || !trimmedQuery || results.length > 0) return [];
     const words = trimmedQuery.toLowerCase().split(/\s+/).filter(Boolean);
     return NAV_VIEWS.filter((view) => {
       const haystack = `${view.label} ${view.keywords} ${view.filter}`.toLowerCase();
       return words.every((word) => haystack.includes(word));
     }).map((view) => ({ kind: "nav", filter: view.filter, label: view.label }));
-  }, [trimmedQuery, results.length]);
+  }, [trimmedQuery, results.length, templateQuery]);
+
+  const templateRows = useMemo<PaletteItem[]>(() => {
+    if (templateQuery === null) return [];
+    return templates
+      .filter((t) =>
+        `${t.name} ${t.title} ${t.list} ${t.tags.join(" ")}`
+          .toLowerCase()
+          .includes(templateQuery)
+      )
+      .map((template) => ({ kind: "template", template }));
+  }, [templates, templateQuery]);
 
   // The create row sits after the search results so the default highlight stays
   // on the best existing match — typing "buy milk" to complete a task must not
@@ -199,11 +242,12 @@ export default function CommandPalette({
   // creates, which is exactly what the user wants.
   const items = useMemo<PaletteItem[]>(() => {
     const list: PaletteItem[] = results.map((task) => ({ kind: "task", task }));
+    for (const row of templateRows) list.push(row);
     if (showCreate) list.push({ kind: "create" });
     for (const row of navRows) list.push(row);
     return list;
-  }, [results, showCreate, navRows]);
-  const createIndex = showCreate ? results.length : -1;
+  }, [results, templateRows, showCreate, navRows]);
+  const createIndex = showCreate ? results.length + templateRows.length : -1;
 
   useEffect(() => {
     setActiveIndex((i) => Math.min(i, Math.max(0, items.length - 1)));
@@ -226,6 +270,8 @@ export default function CommandPalette({
   const activate = (item: PaletteItem) => {
     if (item.kind === "create") {
       onCreateTask(trimmedQuery);
+    } else if (item.kind === "template") {
+      onCreateFromTemplate(item.template);
     } else if (item.kind === "nav") {
       // A view jump replaces whatever the sidebar was showing, so the search
       // box is cleared with it — otherwise the new view opens already filtered
@@ -265,6 +311,8 @@ export default function CommandPalette({
       ? "command-palette-option-create"
       : activeItem.kind === "nav"
       ? `command-palette-option-nav-${activeItem.filter}`
+      : activeItem.kind === "template"
+      ? `command-palette-option-template-${activeItem.template.id}`
       : `command-palette-option-${activeItem.task.id}`
     : undefined;
 
@@ -279,9 +327,15 @@ export default function CommandPalette({
           <Input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              // Typing narrows/reorders the rows. Keeping the old highlight
+              // could leave Enter on the create row (or a different task), so
+              // a query change always returns focus to the best match.
+              setActiveIndex(0);
+            }}
             onKeyDown={onKeyDown}
-            placeholder="Search tasks...  (try #tag, list:work, p:high, is:overdue)"
+            placeholder="Search tasks, or tpl: to reuse a saved template"
             className="border-0 shadow-none focus-visible:ring-0"
             // Focus stays in this input, so the listbox needs explicit
             // combobox wiring or a screen reader never announces which row the
@@ -299,9 +353,11 @@ export default function CommandPalette({
           role="listbox"
           aria-label="Task search results"
         >
-          {results.length === 0 && !showCreate ? (
+          {items.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No tasks match &ldquo;{query}&rdquo;
+              {templateQuery !== null
+                ? "No saved templates match"
+                : `No tasks match “${query}”`}
             </p>
           ) : (
             results.map((t, i) => (
@@ -372,6 +428,52 @@ export default function CommandPalette({
               </div>
             ))
           )}
+          {templateRows.map((row, i) => {
+            if (row.kind !== "template") return null;
+            const idx = results.length + i;
+            const t = row.template;
+            return (
+              <div
+                key={t.id}
+                id={`command-palette-option-template-${t.id}`}
+                ref={idx === activeIndex ? activeRef : null}
+                role="option"
+                aria-selected={idx === activeIndex}
+                className={cn(
+                  "rounded-md mt-1",
+                  idx === activeIndex && "bg-muted"
+                )}
+                onMouseEnter={() => setActiveIndex(idx)}
+              >
+                <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
+                  <Bookmark className="h-4 w-4 shrink-0 text-violet-600" />
+                  <button
+                    type="button"
+                    onClick={() => activate(row)}
+                    className="min-w-0 flex-1 text-left rounded outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span className="block truncate text-sm font-medium">
+                      {t.name}
+                    </span>
+                    {templateMeta(t) && (
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {templateMeta(t)}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete template ${t.name}`}
+                    title="Delete template"
+                    onClick={() => setTemplates(deleteTaskTemplate(t.id))}
+                    className="rounded p-1 text-muted-foreground hover:bg-background hover:text-destructive"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
           {showCreate && (
             <div
               key="__create__"
@@ -410,7 +512,10 @@ export default function CommandPalette({
           )}
           {navRows.map((row, i) => {
             if (row.kind !== "nav") return null;
-            const idx = (createIndex !== -1 ? createIndex + 1 : results.length) + i;
+            const idx =
+              (createIndex !== -1
+                ? createIndex + 1
+                : results.length + templateRows.length) + i;
             return (
               <div
                 key={row.filter}
@@ -451,6 +556,9 @@ export default function CommandPalette({
                 <Plus className="h-3 w-3" /> or type to add
               </span>
             )}
+            <span className="hidden items-center gap-1 sm:flex">
+              <Bookmark className="h-3 w-3" /> tpl:name
+            </span>
             <span className="flex items-center gap-1">
               <Pin className="h-3 w-3" /> pin
             </span>

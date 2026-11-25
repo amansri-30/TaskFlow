@@ -22,7 +22,10 @@ const newTask = catchAsyncError(
     const normalizedTitle = taskTitle.trim().slice(0, 120);
 
     const validPriorities = ["low", "medium", "high"];
-    if (priority && !validPriorities.includes(priority)) {
+    // `priority &&` let an explicit null or empty string through here and then
+    // silently rewrote it below, while PUT rejected the same payload. Creation
+    // now checks whether the field was provided at all, matching the edit path.
+    if (priority !== undefined && !validPriorities.includes(priority)) {
       return handleRes(res, 400, false, "Invalid priority. Use low, medium, or high.");
     }
 
@@ -136,7 +139,7 @@ const newTask = catchAsyncError(
       // "Invalid id provided." -- a misleading 400 for a list field. PUT has
       // always required a trimmed string capped at 50; creation now matches.
       list: normalizedList,
-      priority: priority || "medium",
+      priority: priority === undefined ? "medium" : priority,
       recurrence: effectiveRecurrence,
       repeatUntil: resolvedRepeatUntil,
       monthlyDay: resolvedMonthlyDay,

@@ -113,12 +113,13 @@ export function AddTaskInlineModal({
       return;
     }
     // The calendar picks a DAY, but the due instant is what a lead-time reminder
-    // is anchored to. Without a time the task defaulted to local midnight, so
-    // "1 hour before" fired the night before. Combine the two fields here rather
-    // than at each call site.
+    // is anchored to. A day without a time defaults to local midnight, so
+    // "1 hour before" landed the previous evening (or, for today, was dropped
+    // as already past). Use 09:00, the same default quick capture uses, and
+    // combine the two fields here rather than at each call site.
     const dueDate = data.dueDate ? new Date(data.dueDate) : null;
-    if (dueDate && data.dueTime) {
-      const [hours, minutes] = data.dueTime.split(":").map(Number);
+    if (dueDate) {
+      const [hours, minutes] = (data.dueTime || "09:00").split(":").map(Number);
       if (Number.isFinite(hours) && Number.isFinite(minutes)) {
         dueDate.setHours(hours, minutes, 0, 0);
       }

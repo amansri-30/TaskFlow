@@ -19,6 +19,11 @@ export default function NotificationButton() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  // `today` is derived during render, so an idle tab would keep yesterday's
+  // date until the user focused the window or opened the bell. A quiet tick
+  // moves tasks between Overdue/Due today at midnight without a refetch.
+  const [, setClockTick] = useState(0);
+  const currentDayRef = useRef(startOfDay(new Date()).getTime());
   // The bell refetches on mount, on focus, on every task event and on each
   // popover open. Showing "Loading alerts..." for all of those blanked a
   // popover that already had alerts in it, so the panel flickered every time
@@ -70,6 +75,19 @@ export default function NotificationButton() {
   useEffect(() => {
     if (open) fetchTasks();
   }, [open, fetchTasks]);
+
+  useEffect(() => {
+    // No refetch is needed at midnight -- the rows are already here -- but a
+    // render is, or `today` below stays frozen at the day the tab was opened.
+    const timer = setInterval(() => {
+      const day = startOfDay(new Date()).getTime();
+      if (day !== currentDayRef.current) {
+        currentDayRef.current = day;
+        setClockTick((tick) => tick + 1);
+      }
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const today = startOfDay(new Date());
   const dueToday = tasks.filter((t) => {

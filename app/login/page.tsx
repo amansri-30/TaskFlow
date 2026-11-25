@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   Card,
@@ -25,21 +25,37 @@ export default function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [redirectTo, setRedirectTo] = useState<string | null>(null);
   const userId = useAppSelector(state => state.user.user?._id);
-  const isLoading = useAppSelector(state => state.user.isLoading);
+  // The shared Redux `isLoading` is also set by the mount-time session check,
+  // so it cannot drive this form's disabled state: a stalled revalidation left
+  // a returning user staring at "Logging in..." with no way to submit.
+  const [submitting, setSubmitting] = useState(false);
+  const freshLoginRef = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const target = params.get("redirect");
-    // `startsWith("/")` is not an allowlist. It accepts the protocol-relative
-    // "//evil.com", and WHATWG URL parsing treats "\" as "/" for special
-    // schemes, so "/\evil.com" and "/\/evil.com" resolve cross-origin too.
-    // The sink below runs immediately after a *successful* authentication, so
-    // anything that lands off-origin here is a post-login phishing primitive.
-    // Require a single leading slash that is not followed by a slash or
-    // backslash, and keep it to a real in-app path.
-    const isSafe =
-      !!target && /^\/(?![/\\])/.test(target) && !/^\/[^/]*\.\./.test(target);
-    setRedirectTo(isSafe ? target : null);
+    // `startsWith("/")` is not an allowlist. It accepts "//evil.com", and WHATWG
+    // URL parsing treats "\" as "/" and strips control characters, so even
+    // "/\evil.com" or "/\t/evil.com" resolve cross-origin. The sink below runs
+    // after a *successful* login, so an off-origin target is a phishing
+    // primitive. Resolve against this origin and keep only same-origin paths.
+    let safeTarget: string | null = null;
+    if (target && !/[\u0000-\u001F\u007F]/.test(target)) {
+      try {
+        const resolved = new URL(target, window.location.origin);
+        if (
+          resolved.origin === window.location.origin &&
+          target.startsWith("/") &&
+          !target.startsWith("//") &&
+          !target.startsWith("/\\")
+        ) {
+          safeTarget = resolved.pathname + resolved.search + resolved.hash;
+        }
+      } catch {
+        // A malformed href is not a destination.
+      }
+    }
+    setRedirectTo(safeTarget);
   }, []);
 
   // A persisted user alone is not proof of a valid session. Re-validate the
@@ -61,6 +77,10 @@ export default function LoginForm() {
     dispatch(getCurrentUser()).then((result) => {
       if (cancelled) return;
       setSessionChecked(true);
+      // A fresh login already owns the session and redirects on its own. A late
+      // 401 from the mount-time check must not clear that state or show a false
+      // "session expired" toast after the user successfully signed in.
+      if (freshLoginRef.current) return;
       if (getCurrentUser.rejected.match(result)) {
         const payload = result.payload as
           | { message?: string; unauthenticated?: boolean }
@@ -85,9 +105,21 @@ export default function LoginForm() {
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
-    const result = await dispatch(loginUser({ email, password }));
-    if (loginUser.rejected.match(result)) {
-      toast.error((result.payload as string) || "Invalid email or password");
+    if (submitting) return;
+    setSubmitting(true);
+    freshLoginRef.current = true;
+    try {
+      const result = await dispatch(loginUser({ email, password }));
+      if (loginUser.rejected.match(result)) {
+        toast.error((result.payload as string) || "Invalid email or password");
+      } else if (loginUser.fulfilled.match(result)) {
+        // Redirect from the submit that actually succeeded. The shared reducer
+        // state can still be cleared by the older revalidation, so waiting for
+        // it here could leave a validly logged-in user stuck on this form.
+        router.replace(redirectTo || "/dashboard");
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -155,8 +187,8 @@ export default function LoginForm() {
                   </Label>
                 </div>
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Logging in..." : "Login"}
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? "Logging in..." : "Login"}
                 </Button>
               </div>
               <div className="mt-4 text-center text-sm">

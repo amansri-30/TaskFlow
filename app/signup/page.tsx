@@ -33,7 +33,9 @@ export default function SignUp() {
   const dispatch = useAppDispatch();
   const router = useRouter();
   const isAuthenticated = useAppSelector((state) => state.user?.isAuthenticated);
-  const isLoading = useAppSelector((state) => state.user?.isLoading);
+  // The mount-time session check shares Redux's `isLoading` with registration,
+  // so a slow revalidation disabled the form before the user could sign up.
+  const [submitting, setSubmitting] = useState(false);
 
   // A persisted "authenticated" flag alone is not proof of a live session.
   // Re-validate the cookie-backed user before trusting it, otherwise a stale
@@ -69,25 +71,36 @@ export default function SignUp() {
 
   const SignUpHandler = async (e: FormEvent) => {
     e.preventDefault();
-    // Same policy the register API enforces, checked here so an emoji-heavy
-    // password that is short in characters but over bcrypt's 72-byte limit is
-    // rejected inline instead of after a round trip.
-    const policyError = passwordPolicyError(password);
-    if (policyError) {
-      toast.error(policyError);
-      return;
-    }
-    // Toast from the thunk result, not from a `state.user.error` effect. The
-    // effect only re-runs when the string changes, so submitting twice with the
-    // same failure (the common "email already registered" case) produced no
-    // second toast at all — the button just stopped spinning with no feedback.
-    const result = await dispatch(
-      registerUser({ name: `${firstName} ${lastName}`.trim(), email, password })
-    );
-    if (registerUser.rejected.match(result)) {
-      toast.error(
-        (result.payload as string) || "Sign up failed. Please try again."
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      // Same policy the register API enforces, checked here so an emoji-heavy
+      // password that is short in characters but over bcrypt's 72-byte limit is
+      // rejected inline instead of after a round trip.
+      const policyError = passwordPolicyError(password);
+      if (policyError) {
+        toast.error(policyError);
+        return;
+      }
+      // Toast from the thunk result, not from a `state.user.error` effect. The
+      // effect only re-runs when the string changes, so submitting twice with the
+      // same failure (the common "email already registered" case) produced no
+      // second toast at all — the button just stopped spinning with no feedback.
+      const result = await dispatch(
+        registerUser({ name: `${firstName} ${lastName}`.trim(), email, password })
       );
+      if (registerUser.rejected.match(result)) {
+        toast.error(
+          (result.payload as string) || "Sign up failed. Please try again."
+        );
+      } else if (registerUser.fulfilled.match(result)) {
+        // Redirect from the request that succeeded. The shared state can still
+        // be cleared by an older session revalidation, which used to strand a
+        // freshly registered user on this page.
+        router.push("/dashboard");
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -199,8 +212,8 @@ export default function SignUp() {
                 }
               />
 
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Creating account..." : "Create an account"}
+              <Button type="submit" className="w-full" disabled={submitting}>
+                {submitting ? "Creating account..." : "Create an account"}
               </Button>
             </form>
             <div className="mt-4 text-center text-sm">

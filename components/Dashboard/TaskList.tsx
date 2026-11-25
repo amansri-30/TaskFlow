@@ -407,6 +407,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     }
   }, [undoStack]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectionAnchorRef = useRef<string | null>(null);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
   // Bulk-tag picker. The draft is held locally so Enter can commit it without
@@ -442,7 +443,10 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   };
   const customLists = useCustomLists();
 
-  const resetSelection = () => setSelectedIds(new Set());
+  const resetSelection = () => {
+    selectionAnchorRef.current = null;
+    setSelectedIds(new Set());
+  };
 
   // Remove specific ids from the batch selection without disturbing the rest.
   // Used by trash actions: a restored or permanently deleted bin row must not
@@ -460,16 +464,41 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     setEdit((prev) => !prev);
   };
 
-  const handleSelect = (id: string) =>
+  const handleSelect = (id: string, extend = false) => {
+    // `visibleOrderIds` is the order rows are actually painted in, including
+    // grouped and Trash views. Using the raw `tasks` array would select a
+    // visually unrelated range after sorting or grouping.
+    const anchor = selectionAnchorRef.current;
+    if (extend && anchor && anchor !== id) {
+      const order = visibleOrderIds;
+      const a = order.indexOf(anchor);
+      const b = order.indexOf(id);
+      if (a >= 0 && b >= 0) {
+        const [start, end] = a < b ? [a, b] : [b, a];
+        const range = order.slice(start, end + 1);
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          // Shift-clicking an already checked row clears the whole range;
+          // otherwise the range is added, leaving outside selections intact.
+          const select = !prev.has(id);
+          for (const rowId of range) {
+            if (select) next.add(rowId);
+            else next.delete(rowId);
+          }
+          return next;
+        });
+        return;
+      }
+    }
+    // A plain click re-anchors the next Shift-click on this row.
+    selectionAnchorRef.current = id;
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
+  };
 
   const selectedTasks = tasks.filter((t) => selectedIds.has(t.id));
   const selectedTrashed = trashed.filter((t) => selectedIds.has(t.id));
@@ -1283,6 +1312,20 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
   >("default");
+  // Permission can say "granted" while `new Notification(...)` still throws
+  // (some iOS/WebView implementations only notify through a service worker).
+  // Remember those ids so the in-app banner can deliver the reminder instead
+  // of losing it after the server acknowledgement has already been stamped.
+  const [failedNotificationIds, setFailedNotificationIds] = useState<
+    Set<string>
+  >(new Set());
+  const clearFailedNotification = (id: string) =>
+    setFailedNotificationIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
 
   useEffect(() => {
     const supported =
@@ -1371,8 +1414,10 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
           notification.close();
         };
       } catch {
-        // Some browsers block the constructor; the stamp still prevents a
-        // flood of retries.
+        // The acknowledgement is already committed, so a later scan will not
+        // retry. Surface the reminder in the in-app banner instead of letting
+        // it disappear with the failed system notification.
+        setFailedNotificationIds((prev) => new Set(prev).add(task.id));
       }
       } finally {
         remindersInFlight.current.delete(task.id);
@@ -1394,6 +1439,20 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [notifyDueReminders]);
+
+  // A failed notification is only worth showing while its task is still active.
+  // Completing or deleting it elsewhere prunes the fallback rather than leaving
+  // a stale banner that can never be dismissed.
+  useEffect(() => {
+    setFailedNotificationIds((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(
+        tasks.filter((t) => !t.completed).map((t) => t.id)
+      );
+      const next = new Set(Array.from(prev).filter((id) => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [tasks]);
 
   const requestReminderPermission = async () => {
     if (typeof window === "undefined" || !("Notification" in window)) {
@@ -1432,6 +1491,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     );
     try {
       await axios.put(`/api/task/${task.id}`, { remindAt });
+      clearFailedNotification(task.id);
       toast.success(
         remindAt
           ? `Reminder set for ${reminderLabel(remindAt)}`
@@ -1461,6 +1521,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       setTasks((prev) =>
         prev.map((t) => (t.id === task.id ? { ...t, remindAt: null } : t))
       );
+      clearFailedNotification(task.id);
       toast.success("Reminder dismissed");
     } catch {
       toast.error("Could not dismiss reminder");
@@ -1485,6 +1546,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     );
     try {
       await axios.put(`/api/task/${task.id}`, { remindAt: iso });
+      clearFailedNotification(task.id);
       toast.success(`Reminder snoozed (${reminderLabel(iso)})`);
     } catch {
       // Field-scoped rollback, like the other reminder handlers.
@@ -1897,6 +1959,8 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
     const visible = new Set(
       visibleSelectionKey ? visibleSelectionKey.split("|") : []
     );
+    // A range anchor from a previous view would stretch across unrelated rows.
+    selectionAnchorRef.current = null;
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set<string>();
@@ -1919,10 +1983,15 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
     filter === "trash"
       ? []
       : tasks.filter(
-          (t) => !t.completed && isReminderDue(t.remindAt, t.remindedAt)
+          (t) =>
+            !t.completed &&
+            (isReminderDue(t.remindAt, t.remindedAt) ||
+              failedNotificationIds.has(t.id))
         );
   const reminderFallback =
-    !remindersSupported || notificationPermission !== "granted";
+    !remindersSupported ||
+    notificationPermission !== "granted" ||
+    failedNotificationIds.size > 0;
 
   const incomplete = filtered.filter((t) => !t.completed);
   const pinFirst = (a: Task, b: Task) =>
@@ -1991,6 +2060,18 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
   // the active sort. Recomputed every render on purpose: memoising on `tasks`
   // would miss the rows removed by `removedNextTaskIds` during a batch reopen.
   const dueGroups: DueGroup[] = groupTasksByDue(sortedIncomplete, now);
+
+  // Same order the rows are rendered in: grouped buckets when grouping is on,
+  // then the completed section (or the Trash list). Shift-click range selection
+  // reads this so the highlighted span matches what the user actually sees.
+  const visibleOrderIds = trashView
+    ? trashedFiltered.map((t) => t.id)
+    : [
+        ...(groupByDue
+          ? dueGroups.flatMap((group) => group.tasks.map((t) => t.id))
+          : sortedIncomplete.map((t) => t.id)),
+        ...completed.map((t) => t.id),
+      ];
 
   // A selection narrows every export to exactly the checked rows, even when
   // those rows span several views. Without a selection the file still matches
@@ -2693,6 +2774,24 @@ function deferAnchor(task: Task, dueIso: string | null) {
       // ignore — next explicit refresh will surface errors
     }
   }, []);
+
+  useEffect(() => {
+    // The bell refreshes its own copy on focus; the list did not, so a
+    // reminder dismissed or completed in another tab stayed on screen until a
+    // manual reload. Its 30s scanner was reading the same stale snapshot.
+    const onVisible = () => {
+      // Do not overwrite an optimistic edit that is still waiting on the
+      // server with an older snapshot from this refresh.
+      if (document.visibilityState === "visible" && pendingRef.current.size === 0)
+        refreshSilently();
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [refreshSilently]);
 
   const handleDelete = async (task: Task, series = false) => {
     const previous = new Map(tasks.map((t) => [t.id, t]));
@@ -4039,7 +4138,8 @@ function deferAnchor(task: Task, dueIso: string | null) {
                   </>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    Click checkboxes to select multiple tasks for batch actions.
+                    Click checkboxes to select tasks, or Shift-click to select a
+                    range in the current view.
                   </p>
                 )}
               </div>
@@ -4644,10 +4744,9 @@ function deferAnchor(task: Task, dueIso: string | null) {
             </span>
           </div>
 
-          {/* In-app reminder delivery. Only rendered when the browser cannot or
-              will not show system notifications: with permission granted the
-              scan stamps each reminder and pops an OS notification, so a second
-              surface would just duplicate it. */}
+          {/* In-app reminder delivery: when system notifications are unavailable
+              -- or were granted but the constructor threw -- this is the only
+              surface the user actually sees. */}
           {reminderFallback && dueReminders.length > 0 && (
             <section
               aria-labelledby="due-reminders-heading"
@@ -4660,7 +4759,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
                     ? "1 reminder is due"
                     : `${dueReminders.length} reminders are due`}
                 </h2>
-                {remindersSupported && (
+                {remindersSupported && notificationPermission !== "granted" && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -4672,9 +4771,11 @@ function deferAnchor(task: Task, dueIso: string | null) {
                 )}
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                {remindersSupported
-                  ? "Browser notifications are off, so reminders appear here until you snooze or dismiss them."
-                  : "This browser cannot show system notifications, so reminders appear here until you snooze or dismiss them."}
+                {!remindersSupported
+                  ? "This browser cannot show system notifications, so reminders appear here until you snooze or dismiss them."
+                  : notificationPermission !== "granted"
+                    ? "Browser notifications are off, so reminders appear here until you snooze or dismiss them."
+                    : "Browser notifications could not be shown, so these reminders appear here until you snooze or dismiss them."}
               </p>
               <ul className="mt-2 flex flex-col gap-1">
                 {dueReminders.slice(0, 3).map((task) => (
@@ -5045,7 +5146,7 @@ function TaskItem({
   edit: boolean;
   selected: boolean;
   busy: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, extend?: boolean) => void;
   onToggle: (task: Task, value: boolean) => void;
   onTogglePin: (task: Task) => void;
   onSnooze: (task: Task) => void;
@@ -5061,6 +5162,7 @@ function TaskItem({
   remindersSupported: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const shiftSelectRef = useRef(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -5159,6 +5261,11 @@ function TaskItem({
       data-task-row={task.id}
       data-task-row-kind="task"
       tabIndex={-1}
+      // Capture the modifier before Radix's checkbox handler runs; the change
+      // callback itself only receives the checked value, not the pointer event.
+      onClickCapture={(e) => {
+        shiftSelectRef.current = edit && e.shiftKey;
+      }}
       className={`flex px-2 items-center justify-between space-x-2 w-full rounded-lg transition duration-300 ease-in-out group focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-1 ${
         selected
           ? "bg-emerald-50 dark:bg-emerald-950/40 ring-1 ring-emerald-300 dark:ring-emerald-800"
@@ -5169,9 +5276,12 @@ function TaskItem({
         <Checkbox
           id={`task-${task.id}`}
           checked={edit ? selected : !!task.completed}
-          onCheckedChange={(v) =>
-            edit ? onSelect(task.id) : onToggle(task, v === true)
-          }
+          onCheckedChange={(v) => {
+            const extend = shiftSelectRef.current;
+            shiftSelectRef.current = false;
+            if (edit) onSelect(task.id, extend);
+            else onToggle(task, v === true);
+          }}
           disabled={!edit && busy}
           aria-label={
             edit ? `Select ${task.title}` : `Mark ${task.title} as done`

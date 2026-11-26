@@ -51,7 +51,7 @@ Undo2,
   Keyboard,
   BookmarkPlus,
 } from "lucide-react";
-import { isSameDay, startOfDay, isBefore, addDays, isAfter, formatDistanceToNow } from "date-fns";
+import { isSameDay, startOfDay, startOfWeek, isBefore, addDays, isAfter, formatDistanceToNow } from "date-fns";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -100,6 +100,7 @@ import { AddTaskButton } from "./AddTask/AddTaskButton";
 import { EditTaskDialogContent } from "./AddTask/EditTaskDialog";
 import ActivityHeatmap from "./ActivityHeatmap";
 import CommandPalette from "./CommandPalette";
+import FocusTimer from "./FocusTimer";
 import {
   Select,
   SelectContent,
@@ -1726,7 +1727,10 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   const pendingCount = total - completedCount;
   const completionPct = total === 0 ? 0 : Math.round((completedCount / total) * 100);
 
-  const weekStart = startOfDay(addDays(new Date(), -6));
+  // The overview says "This Week", not "last seven days". Align its lower
+  // bound with the Monday-start calendar week used by the due groups below,
+  // so completions from the previous week are not reported as this week's.
+  const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
   const now = new Date();
   const completedThisWeek = tasks.filter((t) => {
     if (!t.completed || !t.completedAt) return false;
@@ -4735,6 +4739,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
               </>
             ) : null}
             {importExportControls}
+            <FocusTimer tasks={tasks} />
             <span className="ml-auto text-xs text-muted-foreground">
               {filtered.length} shown
               {hiddenCompletedCount > 0
@@ -5053,6 +5058,7 @@ function deferAnchor(task: Task, dueIso: string | null) {
               { keys: "Space", label: "Complete / reopen focused task" },
               { keys: "P", label: "Pin / unpin focused task" },
               { keys: "A", label: "Focus quick add" },
+              { keys: "Shift + click", label: "Select a range in batch mode" },
               { keys: "⌘ / Ctrl + K", label: "Open command palette" },
               { keys: "⌘ / Ctrl + Z", label: "Undo last action" },
               { keys: "?", label: "Show this help" },

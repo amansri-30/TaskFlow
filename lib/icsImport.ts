@@ -666,15 +666,23 @@ export function icsToTaskSeeds(text: string): IcsImportResult {
 
     const list = (parts.list || "default").trim().toLowerCase().slice(0, 50);
     // The exporter writes CATEGORIES as list + tags and also repeats them in
-    // DESCRIPTION. Union the two sources and drop the list value so a round trip
-    // does not turn one tag into two.
+    // DESCRIPTION. Union the two sources, dropping only the list value contributed
+    // by CATEGORIES so a round trip does not turn one tag into two.
     const listKey = (parts.list || "").trim().toLowerCase();
     const tagKeys = new Set<string>();
     const tags: string[] = [];
-    for (const candidate of [...parts.tags, ...categories]) {
+    // Only the CATEGORIES copy of the list is a duplicate; a genuine tag whose
+    // name happens to equal the list must survive the round trip. Filtering the
+    // categories source alone keeps that tag instead of dropping every match.
+    for (const candidate of [
+      ...parts.tags,
+      ...categories.filter(
+        (candidate) => candidate.trim().toLowerCase() !== listKey
+      ),
+    ]) {
       const tag = candidate.trim();
       const key = tag.toLowerCase();
-      if (!tag || key === listKey || tagKeys.has(key)) continue;
+      if (!tag || tagKeys.has(key)) continue;
       tagKeys.add(key);
       tags.push(tag);
     }
@@ -723,7 +731,16 @@ export function icsToTaskSeeds(text: string): IcsImportResult {
           remindMs = anchorMs + offset;
         }
       }
-      if (remindMs !== null && remindMs > Date.now()) {
+      if (
+        remindMs !== null &&
+        Number.isFinite(remindMs) &&
+        remindMs > Date.now() &&
+        remindMs <= 8.64e15
+      ) {
+        // A malformed duration such as TRIGGER:P999999999999999999999D parses
+        // to a finite number that is far outside Date's range. Calling
+        // toISOString() on it throws and used to abort the entire import,
+        // discarding every valid event in the file.
         remindAt = new Date(remindMs).toISOString();
       }
     }

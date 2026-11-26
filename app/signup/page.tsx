@@ -1,5 +1,5 @@
 "use client";
-import React, { FormEvent, useEffect, useState } from "react";
+import React, { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
@@ -36,26 +36,37 @@ export default function SignUp() {
   // The mount-time session check shares Redux's `isLoading` with registration,
   // so a slow revalidation disabled the form before the user could sign up.
   const [submitting, setSubmitting] = useState(false);
+  const freshSignupRef = useRef(false);
+  const sessionCheckRef = useRef<{ abort: () => void } | null>(null);
 
   // A persisted "authenticated" flag alone is not proof of a live session.
-  // Re-validate the cookie-backed user before trusting it, otherwise a stale
-  // flag bounces here -> /dashboard -> /login forever. The redirect waits on
-  // `sessionChecked`, because redirecting on the raw flag lands on /dashboard,
-  // where middleware finds no token and sends the browser back -- once per
-  // bounce, until this revalidation resolves.
+  // Only a successful revalidation may redirect to /dashboard: a timeout or
+  // 500 leaves the stale flag in Redux by design and used to bounce between
+  // /signup and /dashboard until the network recovered.
   const [sessionChecked, setSessionChecked] = useState(!isAuthenticated);
+  const [sessionVerified, setSessionVerified] = useState(false);
   useEffect(() => {
-    if (sessionChecked && isAuthenticated) {
+    if (sessionChecked && sessionVerified && isAuthenticated) {
       router.push("/dashboard");
     }
-  }, [sessionChecked, isAuthenticated, router]);
+  }, [sessionChecked, sessionVerified, isAuthenticated, router]);
 
   useEffect(() => {
     const authedAtMount = isAuthenticated;
     if (!authedAtMount) return;
-    dispatch(getCurrentUser()).then(() => {
+    let cancelled = false;
+    const check = dispatch(getCurrentUser());
+    sessionCheckRef.current = check;
+    check.then((result) => {
+      if (cancelled || freshSignupRef.current) return;
       setSessionChecked(true);
+      if (getCurrentUser.fulfilled.match(result)) setSessionVerified(true);
     });
+    return () => {
+      cancelled = true;
+      check.abort();
+      if (sessionCheckRef.current === check) sessionCheckRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -72,16 +83,22 @@ export default function SignUp() {
   const SignUpHandler = async (e: FormEvent) => {
     e.preventDefault();
     if (submitting) return;
+    // Same policy the register API enforces, checked here so an emoji-heavy
+    // password that is short in characters but over bcrypt's 72-byte limit is
+    // rejected inline instead of after a round trip. A local validation error
+    // must not cancel a still-useful session check.
+    const policyError = passwordPolicyError(password);
+    if (policyError) {
+      toast.error(policyError);
+      return;
+    }
     setSubmitting(true);
+    freshSignupRef.current = true;
+    // A late 401 from the mount-time check must not clear this registration's
+    // fresh Redux session. Aborting also stops the in-flight request.
+    sessionCheckRef.current?.abort();
+    sessionCheckRef.current = null;
     try {
-      // Same policy the register API enforces, checked here so an emoji-heavy
-      // password that is short in characters but over bcrypt's 72-byte limit is
-      // rejected inline instead of after a round trip.
-      const policyError = passwordPolicyError(password);
-      if (policyError) {
-        toast.error(policyError);
-        return;
-      }
       // Toast from the thunk result, not from a `state.user.error` effect. The
       // effect only re-runs when the string changes, so submitting twice with the
       // same failure (the common "email already registered" case) produced no

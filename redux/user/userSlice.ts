@@ -97,6 +97,10 @@ export const getCurrentUser = createAsyncThunk(
     try {
       const response = await axios.get(`${server}/api/profile`, {
         withCredentials: true,
+        // The login/signup pages abort this mount-time check as soon as the
+        // user submits. Without the signal, a slow 401 could still land after
+        // a successful sign-in and clear the fresh session from Redux.
+        signal: thunkAPI.signal,
       });
       return response.data.user;
     } catch (error: any) {
@@ -138,11 +142,10 @@ const userSlice = createSlice({
       })
       .addCase(loginUser.rejected, (state, action) => {
         state.isLoading = false;
-        state.isAuthenticated = false;
-        // A failed login after a previously persisted user must not leave the
-        // stale user behind, or the login page would bounce straight to the
-        // dashboard again.
-        state.user = null;
+        // A bad password says nothing about an existing httpOnly session. The
+        // API does not clear the cookie on 400, so wiping Redux here left a
+        // working dashboard showing "TaskFlow" instead of the signed-in user.
+        // The login page now waits for a successful thunk before redirecting.
         state.error = (action.payload as string) || "Login failed. Please try again.";
       })
 
@@ -157,8 +160,8 @@ const userSlice = createSlice({
       })
       .addCase(registerUser.rejected, (state, action) => {
         state.isLoading = false;
-        state.isAuthenticated = false;
-        state.user = null;
+        // Same rule as login: a duplicate email or validation error must not
+        // invalidate a session cookie the server never touched.
         state.error = action.payload as string;
       })
 
@@ -193,6 +196,10 @@ const userSlice = createSlice({
         }
       )
       .addCase(getCurrentUser.rejected, (state, action) => {
+        // An aborted check was superseded by a fresh login/register. It carries
+        // no verdict about that new session, so leave the state alone -- including
+        // `isLoading`, which the new request owns now.
+        if (action.meta.aborted) return;
         state.isLoading = false;
         const payload = action.payload as SessionError | undefined;
         state.error =

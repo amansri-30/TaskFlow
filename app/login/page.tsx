@@ -30,6 +30,7 @@ export default function LoginForm() {
   // a returning user staring at "Logging in..." with no way to submit.
   const [submitting, setSubmitting] = useState(false);
   const freshLoginRef = useRef(false);
+  const sessionCheckRef = useRef<{ abort: () => void } | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -59,55 +60,61 @@ export default function LoginForm() {
   }, []);
 
   // A persisted user alone is not proof of a valid session. Re-validate the
-  // cookie-backed user on the server before trusting the persisted state; if the
-  // cookie is gone, getCurrentUser rejects and clears the user, breaking the
-  // login <-> dashboard redirect loop.
-  //
-  // The redirect below waits on `sessionChecked`. Redirecting on the raw
-  // persisted `userId` sent the browser to /dashboard, where middleware found no
-  // token and bounced it straight back -- repeatedly, once per bounce, until the
-  // revalidation finally landed. That window opens on every visit after the
-  // 15-day cookie expires while the persisted flag lives on, so it is the
-  // ordinary returning-user path, not an edge case.
+  // cookie-backed user on the server before trusting the persisted state. Only
+  // a fulfilled check authorises the redirect: a 500 or offline request leaves
+  // stale Redux state intact by design, and redirecting on that sent the browser
+  // to /dashboard, where middleware bounced it straight back in a loop.
   const [sessionChecked, setSessionChecked] = useState(!userId);
+  const [sessionVerified, setSessionVerified] = useState(false);
   useEffect(() => {
     const userIdAtMount = userId;
     if (!userIdAtMount) return;
     let cancelled = false;
-    dispatch(getCurrentUser()).then((result) => {
+    const check = dispatch(getCurrentUser());
+    sessionCheckRef.current = check;
+    check.then((result) => {
       if (cancelled) return;
       setSessionChecked(true);
-      // A fresh login already owns the session and redirects on its own. A late
-      // 401 from the mount-time check must not clear that state or show a false
-      // "session expired" toast after the user successfully signed in.
+      // A fresh login already owns the session and redirects on its own. Its
+      // abort also stops this older request from clearing the new Redux user.
       if (freshLoginRef.current) return;
-      if (getCurrentUser.rejected.match(result)) {
+      if (getCurrentUser.fulfilled.match(result)) {
+        setSessionVerified(true);
+      } else if (getCurrentUser.rejected.match(result)) {
         const payload = result.payload as
           | { message?: string; unauthenticated?: boolean }
           | undefined;
-        toast.error(
-          payload?.message || "Could not verify your session. Please try again.",
-          { duration: 4000 }
-        );
+        if (!result.meta.aborted) {
+          toast.error(
+            payload?.message || "Could not verify your session. Please try again.",
+            { duration: 4000 }
+          );
+        }
       }
     });
     return () => {
       cancelled = true;
+      check.abort();
+      if (sessionCheckRef.current === check) sessionCheckRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch]);
 
   useEffect(() => {
-    if (sessionChecked && userId) {
+    if (sessionChecked && sessionVerified && userId) {
       router.replace(redirectTo || "/dashboard");
     }
-  }, [sessionChecked, userId, router, redirectTo]);
+  }, [sessionChecked, sessionVerified, userId, router, redirectTo]);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     if (submitting) return;
     setSubmitting(true);
     freshLoginRef.current = true;
+    // Supersede the mount-time check before it can land a late 401 on top of
+    // this sign-in. The thunk passes its signal to axios, so the request stops.
+    sessionCheckRef.current?.abort();
+    sessionCheckRef.current = null;
     try {
       const result = await dispatch(loginUser({ email, password }));
       if (loginUser.rejected.match(result)) {

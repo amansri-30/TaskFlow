@@ -63,6 +63,7 @@ import {
 import { isRecurrence, RECURRENCE_OPTIONS, type Recurrence } from "@/lib/recurrence";
 import { tasksToCsv } from "@/lib/csv";
 import { tasksToIcs } from "@/lib/ics";
+import { tasksToMarkdown } from "@/lib/markdown";
 import { notifyTasksChanged } from "@/lib/taskEvents";
 import { csvToTaskSeeds } from "@/lib/csvImport";
 import { icsToTaskSeeds } from "@/lib/icsImport";
@@ -83,6 +84,7 @@ import {
   type TaskTemplate,
 } from "@/lib/taskTemplates";
 import {
+  dueDateOf,
   groupTasksByDue,
   groupLabel,
   hasDueDate,
@@ -265,6 +267,17 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
 type NewUndoEntry = DistributiveOmit<UndoEntry, "at">;
 
 const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? "s" : ""}`;
+
+/**
+ * Radix portals mark every open overlay with `data-state="open"`. Select
+ * listboxes are overlays too: omitting `listbox` let j/k, `a`, `?` and undo
+ * fire while the user was keyboard-navigating a dropdown.
+ */
+function hasOpenOverlay(): boolean {
+  return !!document.querySelector(
+    '[role="dialog"][data-state="open"], [role="menu"][data-state="open"], [role="listbox"][data-state="open"]'
+  );
+}
 
 export default function TaskList({
   filter,
@@ -1153,10 +1166,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
             target.tagName === "TEXTAREA" ||
             target.tagName === "SELECT" ||
             target.isContentEditable);
-        const overlayOpen = !!document.querySelector(
-          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
-        );
-        if (isTextField || overlayOpen || !quickInputRef.current) return;
+        if (isTextField || hasOpenOverlay() || !quickInputRef.current) return;
         e.preventDefault();
         quickInputRef.current.focus();
         quickInputRef.current.scrollIntoView({ block: "nearest" });
@@ -1180,10 +1190,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
             target.tagName === "TEXTAREA" ||
             target.tagName === "SELECT" ||
             target.isContentEditable);
-        const overlayOpen = !!document.querySelector(
-          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
-        );
-        if (isTextField || overlayOpen) return;
+        if (isTextField || hasOpenOverlay()) return;
         const rows = Array.from(
           document.querySelectorAll<HTMLElement>("[data-task-row]")
         );
@@ -1269,10 +1276,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
             target.tagName === "TEXTAREA" ||
             target.tagName === "SELECT" ||
             target.isContentEditable);
-        const overlayOpen = !!document.querySelector(
-          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
-        );
-        if (isTextField || overlayOpen) return;
+        if (isTextField || hasOpenOverlay()) return;
         const currentRow = target?.closest?.("[data-task-row]") as HTMLElement | null;
         if (
           !currentRow ||
@@ -1299,10 +1303,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
             target.tagName === "TEXTAREA" ||
             target.tagName === "SELECT" ||
             target.isContentEditable);
-        const overlayOpen = !!document.querySelector(
-          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
-        );
-        if (isTextField || overlayOpen) return;
+        if (isTextField || hasOpenOverlay()) return;
         e.preventDefault();
         setShortcutsOpen(true);
         return;
@@ -1319,10 +1320,7 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
             target.tagName === "TEXTAREA" ||
             target.tagName === "SELECT" ||
             target.isContentEditable);
-        const overlayOpen = !!document.querySelector(
-          '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
-        );
-        if (isTextField || overlayOpen) return;
+        if (isTextField || hasOpenOverlay()) return;
         if (!undoStackRef.current.length) return;
         e.preventDefault();
         handleUndoRef.current?.();
@@ -1768,15 +1766,14 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   }).length;
 
   useEffect(() => {
+    // Use the same local date-only parsing as the grouped view and the `is:`
+    // search flags; raw `new Date("2026-11-28")` is the previous day in the
+    // Americas, which made badges and rows disagree for imported tasks.
     const todayCount = tasks.filter((t) => {
-      if (!t.scheduledAt) return false;
-      const d = new Date(t.scheduledAt);
-      return !isNaN(d.getTime()) && isSameDay(d, new Date());
+      const d = dueDateOf(t);
+      return !!d && isSameDay(d, new Date());
     }).length;
-    const scheduledCount = tasks.filter((t) => {
-      if (!t.scheduledAt) return false;
-      return !isNaN(new Date(t.scheduledAt).getTime());
-    }).length;
+    const scheduledCount = tasks.filter((t) => dueDateOf(t) !== null).length;
     const tagCounts = new Map<string, number>();
     for (const t of tasks) {
       for (const tag of t.tags || []) {
@@ -1808,9 +1805,9 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     // itself hides them -- a badge counting finished work would send the user
     // to a list that does not contain it.
     const overdueCount = tasks.filter((t) => {
-      if (!t.scheduledAt || t.completed) return false;
-      const d = new Date(t.scheduledAt);
-      return !isNaN(d.getTime()) && isBefore(d, startOfDay(clock));
+      if (t.completed) return false;
+      const d = dueDateOf(t);
+      return !!d && isBefore(d, startOfDay(clock));
     }).length;
     onStatsChange({
       today: todayCount,
@@ -1854,18 +1851,14 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
     // and its sidebar badge always agree.
     if (filter === "done") return !!t.completed;
     if (filter === "today") {
-      if (!t.scheduledAt) return false;
-      const d = new Date(t.scheduledAt);
-      return !isNaN(d.getTime()) && isSameDay(d, new Date());
+      const d = dueDateOf(t);
+      return !!d && isSameDay(d, new Date());
     }
-    if (filter === "scheduled") {
-      if (!t.scheduledAt) return false;
-      return !isNaN(new Date(t.scheduledAt).getTime());
-    }
+    if (filter === "scheduled") return dueDateOf(t) !== null;
     if (filter === "overdue") {
-      if (!t.scheduledAt || t.completed) return false;
-      const d = new Date(t.scheduledAt);
-      return !isNaN(d.getTime()) && isBefore(d, today);
+      if (t.completed) return false;
+      const d = dueDateOf(t);
+      return !!d && isBefore(d, today);
     }
     // Smart views. Completed tasks are included exactly like "today" and
     // "scheduled" already are, so the sidebar badge and the list never disagree
@@ -1898,6 +1891,12 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
 // `is: fine` still finds text reading "is: fine" instead of silently matching
 // nothing. The matcher lives in one place because the active and trash
 // branches had already drifted into two near-identical copies of it.
+// Tags are normalized on write (#C++ -> "c", #Work/Life -> "worklife"). The
+// search box lowercased the token but kept its punctuation, so typing the tag
+// exactly as it was entered found nothing. Keep impossible tokens unmatchable
+// rather than turning them into an empty substring that matches every tag.
+const searchTag = (raw: string): string => normalizeTags([raw])[0] || "\u0000";
+
 const searchQuery = (() => {
   const q = {
     text: [] as string[],
@@ -1908,14 +1907,14 @@ const searchQuery = (() => {
   };
   for (const token of term.split(/\s+/).filter(Boolean)) {
     if (token.startsWith("#") && token.length > 1) {
-      q.tags.push(token.slice(1));
+      q.tags.push(searchTag(token.slice(1)));
       continue;
     }
     const match = /^(list|tag|p|priority|is):(.*)$/.exec(token);
     const value = match ? match[2] : "";
     if (match && value) {
       if (match[1] === "list") q.lists.push(value);
-      else if (match[1] === "tag") q.tags.push(value);
+      else if (match[1] === "tag") q.tags.push(searchTag(value));
       else if (match[1] === "p" || match[1] === "priority")
         q.priorities.push(value);
       else if (SEARCH_FLAGS.has(value)) q.flags.push(value);
@@ -2180,6 +2179,23 @@ const trashedFiltered = trashView ? trashed.filter((t) => matchesSearch(t)) : []
       exportFileName("csv")
     );
     toast.success(`Exported ${plural(exported.length, "task")} to CSV`);
+  };
+
+  // Markdown checklist. Unlike CSV/JSON this is meant for humans — pasting a
+  // view into a doc, issue or chat — so it keeps the same selection scope but
+  // presents checkboxes, lists, tags and subtasks as readable text.
+  const handleExportMarkdown = () => {
+    const exported = exportRows();
+    if (exported.length === 0) return;
+    downloadFile(
+      tasksToMarkdown(
+        exported,
+        `TaskFlow — ${trashView ? "Trash" : activeFilterLabel}`
+      ),
+      "text/markdown;charset=utf-8",
+      exportFileName("md")
+    );
+    toast.success(`Exported ${plural(exported.length, "task")} to Markdown`);
   };
 
   // Calendar export. The file opens as a new calendar in Google Calendar,
@@ -3745,6 +3761,14 @@ function deferAnchor(task: Task, dueIso: string | null) {
               <span>CSV (spreadsheet)</span>
               <span className="text-xs text-muted-foreground">
                 Excel, Sheets, Numbers
+              </span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={handleExportMarkdown}>
+            <span className="flex flex-col">
+              <span>Markdown (checklist)</span>
+              <span className="text-xs text-muted-foreground">
+                Paste into docs, issues or chat
               </span>
             </span>
           </DropdownMenuItem>

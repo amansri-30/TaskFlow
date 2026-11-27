@@ -5200,6 +5200,11 @@ function TaskItem({
   const [notesOpen, setNotesOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  // The edit form snapshots the task on mount. Its DialogContent is portalled
+  // and unmounted while closed, but the component itself survived, so a cancelled
+  // edit (Escape / outside click) was still showing -- and eventually saving --
+  // the old draft on the next open. Remount it for every opening instead.
+  const [editSession, setEditSession] = useState(0);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [reminderOpen, setReminderOpen] = useState(false);
@@ -5521,13 +5526,20 @@ function TaskItem({
         {task.recurrence && task.recurrence !== "none" && (
           <RecurrenceLabel recurrence={task.recurrence} repeatUntil={task.repeatUntil} />
         )}
-        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <Dialog
+          open={editOpen}
+          onOpenChange={(open) => {
+            if (open) setEditSession((session) => session + 1);
+            setEditOpen(open);
+          }}
+        >
           <DialogTrigger asChild>
             <button aria-label={`Edit ${task.title}`} className="p-1 hover:bg-muted rounded">
               <PencilEdit02Icon className="h-4 w-4" />
             </button>
           </DialogTrigger>
           <EditTaskDialogContent
+            key={editSession}
             task={task}
             onSaved={() => {
               // The refresh swaps in a new task object, but the dialog's form

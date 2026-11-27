@@ -112,7 +112,7 @@ export default function ForgotPassword() {
               }
               description={
                 errorMessage
-                  ? `${errorMessage} No reset token was created, so do not use an older one for this account.`
+                  ? `${errorMessage} No new token was created by this request.`
                   : mailOnly
                   ? "If an account exists with that email, a reset link is on its way. This deployment has no email service configured, so a link cannot be delivered here — an administrator can enable token display for local testing."
                   : "No email service is configured, so your one-time token is shown here (valid for 60 minutes). Use it on the Reset Password page."

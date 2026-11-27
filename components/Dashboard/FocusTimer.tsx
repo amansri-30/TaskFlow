@@ -20,12 +20,15 @@ import { Button } from "@/components/ui/button";
 import type { Task } from "@/types";
 import {
   clearFocusSessions,
+  DEFAULT_FOCUS_GOAL_MINUTES,
   durationFor,
   formatTimer,
   initialFocusTimer,
+  loadFocusGoal,
   loadFocusSessions,
   loadFocusTimer,
   recordFocusSession,
+  saveFocusGoal,
   saveFocusTimer,
   type FocusMode,
   type FocusSession,
@@ -45,12 +48,14 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
   // would briefly overwrite the saved timer with the default state.
   const [hydrated, setHydrated] = useState(false);
   const [sessions, setSessions] = useState<FocusSession[]>([]);
+  const [goal, setGoal] = useState(DEFAULT_FOCUS_GOAL_MINUTES);
   const [logOpen, setLogOpen] = useState(false);
   const finishedRef = useRef(false);
 
   useEffect(() => {
     setState(loadFocusTimer());
     setSessions(loadFocusSessions());
+    setGoal(loadFocusGoal());
     setNow(Date.now());
     setHydrated(true);
   }, []);
@@ -189,6 +194,7 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
     (session) => new Date(session.endedAt).toDateString() === todayLabel
   );
   const todayMinutes = todaySessions.reduce((sum, s) => sum + s.minutes, 0);
+  const goalProgress = Math.min(100, Math.round((todayMinutes / goal) * 100));
   const taskSessions = state.taskId
     ? sessions.filter((session) => session.taskId === state.taskId)
     : [];
@@ -296,7 +302,7 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
               <History className="h-3.5 w-3.5" /> Focus log
             </span>
             <span className="text-muted-foreground">
-              Today: {todaySessions.length} &middot; {todayMinutes} min
+              Today: {todaySessions.length} &middot; {todayMinutes}/{goal} min
             </span>
           </button>
           {selectedTask && taskSessions.length > 0 && (
@@ -308,6 +314,36 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
           )}
           {logOpen && (
             <div className="space-y-1.5">
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>Daily focus goal</span>
+                  <span>{goalProgress}%</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+                    style={{ width: `${goalProgress}%` }}
+                  />
+                </div>
+              </div>
+              <label className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Goal (minutes)</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={480}
+                  value={goal}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (!Number.isFinite(next)) return;
+                    const clamped = Math.min(480, Math.max(5, Math.round(next)));
+                    setGoal(clamped);
+                    saveFocusGoal(clamped);
+                  }}
+                  aria-label="Daily focus goal in minutes"
+                  className="w-20 rounded-md border bg-background px-2 py-1 text-right"
+                />
+              </label>
               {sessions.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   No finished focus sessions yet.

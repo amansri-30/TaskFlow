@@ -164,7 +164,10 @@ export function parseQuickAdd(
 
     if (lower === "today" || lower === "tonight") {
       dueDate = startOfDay(now);
-      if (lower === "tonight") time = { hours: 20, minutes: 0 };
+      // "tonight" supplies 20:00 only as a default. An explicit clock reading
+      // already parsed from the same phrase ("call mom at 9pm tonight") must
+      // win, or the user's chosen time is replaced and stripped from the title.
+      if (lower === "tonight" && !time) time = { hours: 20, minutes: 0 };
       continue;
     }
 

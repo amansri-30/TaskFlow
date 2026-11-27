@@ -123,6 +123,13 @@ export function AddTaskInlineModal({
       if (Number.isFinite(hours) && Number.isFinite(minutes)) {
         dueDate.setHours(hours, minutes, 0, 0);
       }
+      // Picking "today" with no time defaults to 09:00. After that hour the new
+      // task would start already overdue, and a lead-time reminder would resolve
+      // to the past and be dropped. Quick capture bumps elapsed instants by a
+      // minute; do the same here so both entry paths agree.
+      if (dueDate.getTime() < Date.now()) {
+        dueDate.setTime(Date.now() + 60_000);
+      }
     }
     const reminderAt = resolveReminderAt(
       data.reminder,

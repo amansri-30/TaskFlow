@@ -1,6 +1,6 @@
 "use client";
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
 import axios from "axios";
 import PageTemplate from "@/components/elements/PageTemplate";
@@ -18,18 +18,21 @@ import { Label } from "@/components/ui/label";
 import { LockKeyhole } from "lucide-react";
 import { passwordPolicyError } from "@/lib/passwordPolicy";
 
-export default function ResetPassword() {
+function ResetPasswordForm() {
   const router = useRouter();
+  // The App Router reuses this page when only the query string changes, so a
+  // mount-only window.location read left a second reset link showing the first
+  // token. useSearchParams tracks client navigations and history entries.
+  const searchParams = useSearchParams();
   const [token, setToken] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const t = params.get("token");
+    const t = searchParams?.get("token");
     if (t) setToken(t);
-  }, []);
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -123,5 +126,20 @@ export default function ResetPassword() {
         </Card>
       </div>
     </PageTemplate>
+  );
+}
+
+// useSearchParams requires a Suspense boundary when this route is prerendered.
+export default function ResetPassword() {
+  return (
+    <Suspense
+      fallback={
+        <PageTemplate>
+          <div className="min-h-[60vh]" aria-label="Loading reset form" />
+        </PageTemplate>
+      }
+    >
+      <ResetPasswordForm />
+    </Suspense>
   );
 }

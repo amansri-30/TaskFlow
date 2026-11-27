@@ -151,3 +151,30 @@ export function clearFocusSessions(): void {
     // Nothing else to do; the in-memory state is cleared by the caller.
   }
 }
+
+/** Personal daily target, kept beside the session log it measures. */
+export const DEFAULT_FOCUS_GOAL_MINUTES = 100;
+const GOAL_KEY = "taskflow:focus-goal";
+
+export function loadFocusGoal(): number {
+  if (typeof window === "undefined") return DEFAULT_FOCUS_GOAL_MINUTES;
+  try {
+    const raw = window.localStorage.getItem(GOAL_KEY);
+    if (raw === null) return DEFAULT_FOCUS_GOAL_MINUTES;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 5 && value <= 480
+      ? Math.round(value)
+      : DEFAULT_FOCUS_GOAL_MINUTES;
+  } catch {
+    return DEFAULT_FOCUS_GOAL_MINUTES;
+  }
+}
+
+export function saveFocusGoal(minutes: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(GOAL_KEY, String(minutes));
+  } catch {
+    // The goal simply falls back to the default after a refresh.
+  }
+}

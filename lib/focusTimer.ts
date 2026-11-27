@@ -82,3 +82,72 @@ export function formatTimer(ms: number): string {
   const seconds = total % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
+
+/** A finished focus round. Break rounds are deliberately not logged. */
+export type FocusSession = {
+  endedAt: number;
+  taskId: string | null;
+  minutes: number;
+};
+
+const SESSIONS_KEY = "taskflow:focus-sessions";
+const MAX_SESSIONS = 500;
+const SESSION_RETENTION_MS = 90 * 24 * 60 * 60_000;
+
+export function loadFocusSessions(): FocusSession[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(SESSIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is FocusSession => {
+        if (!item || typeof item !== "object") return false;
+        const entry = item as Partial<FocusSession>;
+        return (
+          typeof entry.endedAt === "number" &&
+          Number.isFinite(entry.endedAt) &&
+          typeof entry.minutes === "number" &&
+          Number.isFinite(entry.minutes) &&
+          entry.minutes > 0
+        );
+      })
+      .map((item) => ({
+        endedAt: item.endedAt,
+        taskId: typeof item.taskId === "string" ? item.taskId : null,
+        minutes: Math.round(item.minutes),
+      }))
+      .slice(-MAX_SESSIONS);
+  } catch {
+    return [];
+  }
+}
+
+function persistSessions(sessions: FocusSession[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+  } catch {
+    // A full or unavailable store only costs the local history.
+  }
+}
+
+export function recordFocusSession(session: FocusSession): FocusSession[] {
+  const cutoff = Date.now() - SESSION_RETENTION_MS;
+  const sessions = loadFocusSessions()
+    .filter((item) => item.endedAt >= cutoff)
+    .concat(session)
+    .slice(-MAX_SESSIONS);
+  persistSessions(sessions);
+  return sessions;
+}
+
+export function clearFocusSessions(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(SESSIONS_KEY);
+  } catch {
+    // Nothing else to do; the in-memory state is cleared by the caller.
+  }
+}

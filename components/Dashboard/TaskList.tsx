@@ -411,6 +411,33 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
   const selectionAnchorRef = useRef<string | null>(null);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [batchActionNonce, setBatchActionNonce] = useState(0);
+  // An idle tab gets no task mutation to trigger the stats effect, so Today /
+  // Overdue / Next 7 badges kept yesterday's numbers until the next edit.
+  // Wake the render once at local midnight; every date bucket below derives
+  // from `new Date()` and then recomputes against the new day.
+  const [dayTick, setDayTick] = useState(0);
+  useEffect(() => {
+    let timer: number | undefined;
+    const scheduleNextDay = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1
+      );
+      timer = window.setTimeout(
+        () => {
+          setDayTick((tick) => tick + 1);
+          scheduleNextDay();
+        },
+        Math.max(1000, nextMidnight.getTime() - now.getTime())
+      );
+    };
+    scheduleNextDay();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
   // Bulk-tag picker. The draft is held locally so Enter can commit it without
   // the popover stealing the keystroke, and reset on close so a half-typed tag
   // never reappears on the next open.
@@ -1796,7 +1823,8 @@ const [undoStack, setUndoStack] = useState<UndoEntry[]>(loadUndoStack);
       tags,
       lists: listCounts,
     });
-  }, [tasks, onStatsChange, completedCount, pinnedCount]);
+    // `dayTick` carries no value; it only forces this recount at local midnight.
+  }, [tasks, onStatsChange, completedCount, pinnedCount, dayTick]);
 
   const lists = Array.from(new Set(tasks.map((t) => t.list).filter(Boolean)));
 

@@ -1,3 +1,5 @@
+"use client";
+import React, { useEffect, useState } from "react";
 import { Task } from "@/types";
 import {
   addDays,
@@ -81,6 +83,16 @@ function tone(level: number): string {
 }
 
 export default function ActivityHeatmap({ tasks }: { tasks: Task[] }) {
+  // The grid keys and tooltips embed local calendar dates. Computing them
+  // during the server render produced markup for the server's timezone, which
+  // hydrated into different cells and labels in the browser. Render a stable
+  // placeholder on both sides, then build the grid from the client clock.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!mounted) return <div className="mt-4 min-h-[130px]" aria-hidden="true" />;
+
   const today = startOfDay(new Date());
   const gridStart = startOfWeek(addDays(today, -7 * (WEEKS - 1)), {
     weekStartsOn: 1,

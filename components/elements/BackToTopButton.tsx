@@ -25,6 +25,9 @@ export default function BackToTopButton() {
   };
 
   useEffect(() => {
+    // A restored scroll position does not emit a scroll event, so without this
+    // initial check the button stayed invisible until the user scrolled again.
+    toggleVisibility();
     window.addEventListener("scroll", toggleVisibility);
     return () => {
       window.removeEventListener("scroll", toggleVisibility);

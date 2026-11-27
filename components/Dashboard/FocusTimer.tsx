@@ -2,7 +2,15 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Coffee, Pause, Play, RotateCcw, Timer } from "lucide-react";
+import {
+  Coffee,
+  History,
+  Pause,
+  Play,
+  RotateCcw,
+  Timer,
+  Trash2,
+} from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -11,12 +19,16 @@ import {
 import { Button } from "@/components/ui/button";
 import type { Task } from "@/types";
 import {
+  clearFocusSessions,
   durationFor,
   formatTimer,
   initialFocusTimer,
+  loadFocusSessions,
   loadFocusTimer,
+  recordFocusSession,
   saveFocusTimer,
   type FocusMode,
+  type FocusSession,
   type FocusTimerState,
 } from "@/lib/focusTimer";
 
@@ -32,10 +44,13 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
   // Delay persistence until that load has been applied, or the first commit
   // would briefly overwrite the saved timer with the default state.
   const [hydrated, setHydrated] = useState(false);
+  const [sessions, setSessions] = useState<FocusSession[]>([]);
+  const [logOpen, setLogOpen] = useState(false);
   const finishedRef = useRef(false);
 
   useEffect(() => {
     setState(loadFocusTimer());
+    setSessions(loadFocusSessions());
     setNow(Date.now());
     setHydrated(true);
   }, []);
@@ -57,12 +72,23 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
       : state.remainingMs;
 
   const announceCompletion = useCallback(() => {
+    const focus = state.mode === "focus";
     setState((prev) =>
       prev.running
         ? { ...prev, running: false, endAt: null, remainingMs: 0 }
         : prev
     );
-    const focus = state.mode === "focus";
+    if (focus) {
+      // Record the finished round once, including rounds that elapsed while
+      // the dashboard was closed: this runs on the first mount that sees them.
+      setSessions(
+        recordFocusSession({
+          endedAt: Date.now(),
+          taskId: state.taskId,
+          minutes: Math.round(durationFor("focus") / 60_000),
+        })
+      );
+    }
     const title = focus ? "Focus session complete" : "Break over";
     const task = tasks.find((t) => t.id === state.taskId);
     const body = task
@@ -158,6 +184,14 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
       : open;
   }, [tasks, selectedTask]);
   const progress = Math.min(100, Math.max(0, ((duration - remaining) / duration) * 100));
+  const todayLabel = new Date().toDateString();
+  const todaySessions = sessions.filter(
+    (session) => new Date(session.endedAt).toDateString() === todayLabel
+  );
+  const todayMinutes = todaySessions.reduce((sum, s) => sum + s.minutes, 0);
+  const taskSessions = state.taskId
+    ? sessions.filter((session) => session.taskId === state.taskId)
+    : [];
 
   return (
     <Popover>
@@ -250,6 +284,77 @@ export default function FocusTimer({ tasks }: { tasks: Task[] }) {
           <Coffee className="h-3.5 w-3.5 shrink-0" />
           Keeps running in the background, even after a refresh.
         </p>
+
+        <div className="space-y-2 border-t pt-2">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-xs font-medium"
+            aria-expanded={logOpen}
+            onClick={() => setLogOpen((open) => !open)}
+          >
+            <span className="flex items-center gap-1.5">
+              <History className="h-3.5 w-3.5" /> Focus log
+            </span>
+            <span className="text-muted-foreground">
+              Today: {todaySessions.length} &middot; {todayMinutes} min
+            </span>
+          </button>
+          {selectedTask && taskSessions.length > 0 && (
+            <p className="truncate text-xs text-muted-foreground">
+              {selectedTask.title}: {taskSessions.length} session
+              {taskSessions.length === 1 ? "" : "s"} &middot;{" "}
+              {taskSessions.reduce((sum, s) => sum + s.minutes, 0)} min
+            </p>
+          )}
+          {logOpen && (
+            <div className="space-y-1.5">
+              {sessions.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No finished focus sessions yet.
+                </p>
+              ) : (
+                <ul className="max-h-40 space-y-1 overflow-y-auto text-xs">
+                  {sessions
+                    .slice(-5)
+                    .reverse()
+                    .map((session, index) => {
+                      const task = tasks.find((t) => t.id === session.taskId);
+                      return (
+                        <li
+                          key={`${session.endedAt}-${index}`}
+                          className="flex items-center justify-between gap-2"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {task?.title || "No task"}
+                          </span>
+                          <span className="shrink-0 text-muted-foreground">
+                            {session.minutes}m &middot;{" "}
+                            {new Date(session.endedAt).toLocaleDateString(
+                              undefined,
+                              { month: "short", day: "numeric" }
+                            )}
+                          </span>
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
+              {sessions.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-full justify-start px-0 text-xs text-muted-foreground"
+                  onClick={() => {
+                    clearFocusSessions();
+                    setSessions([]);
+                  }}
+                >
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Clear history
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );
